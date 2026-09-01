@@ -215,6 +215,30 @@ docker compose exec app composer check           # pint --test + phpstan + pest
   `Co-Authored-By: Claude …` or `Claude-Session: …` trailer, and never push a
   commit that contains one. Subject + body only.
 
+## Workflows — database isolation
+
+Parallel work runs in Claude workflows / git worktrees against the one running
+Docker stack. A workflow that changes the schema or seed data **must not** touch
+the shared `gym_trainer` database — clone it first, inside the same `pgsql`
+container, and work on the copy:
+
+```
+# once, at the start of the workflow (<slug> = sanitised branch name)
+docker compose exec pgsql createdb -U gym -T gym_trainer gym_trainer_<slug>
+
+# point the workflow at the copy — in .env
+DB_DATABASE=gym_trainer_<slug>
+
+# when the branch is merged or dropped
+docker compose exec pgsql dropdb -U gym --if-exists gym_trainer_<slug>
+```
+
+- `createdb -T` (template copy) needs no live connections on `gym_trainer`; if it
+  refuses, stop `queue` + `scheduler` for the copy, or
+  `pg_dump gym_trainer | psql gym_trainer_<slug>`.
+- `gym_trainer` is the only long-lived database; every `gym_trainer_*` is
+  disposable. The Pest suite is unaffected — it uses SQLite `:memory:`.
+
 ## Boost MCP
 
 The `laravel-boost` MCP server (`.mcp.json`) runs inside the `app` container, so

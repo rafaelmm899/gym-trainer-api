@@ -204,7 +204,7 @@ docker compose exec app composer check           # pint --test + phpstan + pest
 ```
 
 - After touching PHP: Pint, then PHPStan, then the narrowest Pest run.
-- `pint --dirty` needs git — pass an explicit path until the repo is initialised.
+- `pint --dirty` formats only the files changed since the last commit.
 - Generate with `php artisan make:* --no-interaction`; if the generator can't
   take a path, move the file into its domain subfolder and fix the namespace.
 
@@ -214,6 +214,30 @@ docker compose exec app composer check           # pint --test + phpstan + pest
 - **Commit messages carry no AI attribution.** Never add a
   `Co-Authored-By: Claude …` or `Claude-Session: …` trailer, and never push a
   commit that contains one. Subject + body only.
+
+## Workflows — database isolation
+
+Parallel work runs in Claude workflows / git worktrees against the one running
+Docker stack. A workflow that changes the schema or seed data **must not** touch
+the shared `gym_trainer` database — clone it first, inside the same `pgsql`
+container, and work on the copy:
+
+```
+# once, at the start of the workflow (<slug> = sanitised branch name)
+docker compose exec pgsql createdb -U gym -T gym_trainer gym_trainer_<slug>
+
+# point the workflow at the copy — in .env
+DB_DATABASE=gym_trainer_<slug>
+
+# when the branch is merged or dropped
+docker compose exec pgsql dropdb -U gym --if-exists gym_trainer_<slug>
+```
+
+- `createdb -T` (template copy) needs no live connections on `gym_trainer`; if it
+  refuses, stop `queue` + `scheduler` for the copy, or
+  `pg_dump gym_trainer | psql gym_trainer_<slug>`.
+- `gym_trainer` is the only long-lived database; every `gym_trainer_*` is
+  disposable. The Pest suite is unaffected — it uses SQLite `:memory:`.
 
 ## Boost MCP
 
