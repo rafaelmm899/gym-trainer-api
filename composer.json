@@ -7,6 +7,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
+        "dedoc/scramble": "^0.13.42",
         "laravel/ai": "^0.6.8",
         "laravel/framework": "^13.17",
         "laravel/tinker": "^3.0",

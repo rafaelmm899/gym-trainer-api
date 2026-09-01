@@ -183,6 +183,21 @@ Tests mirror the tree: `tests/Feature/{Domain}/` (one file per endpoint),
 - If session analysis fails, the session still completes; the recommendation
   appears on retry.
 
+## API documentation
+
+`dedoc/scramble` builds the OpenAPI 3.1 spec by static analysis — **no
+annotations**. It reads Form Requests, JSON Resources, return types, backed
+enums and route-model binding, so keeping the pipeline typed *is* the docs.
+
+- UI `GET /docs/api` · spec `GET /docs/api.json`. Open in `local`; gated by the
+  `viewApiDocs` Gate elsewhere.
+- Everything under `/api` is picked up automatically — no per-route wiring.
+- Only reach for a `#[...]` attribute or `Scramble::extendOpenApi()` when
+  inference genuinely can't see a shape. That should be rare with this pipeline.
+- `config/scramble.php`: `security_strategy` is off — switch on
+  `MiddlewareAuthSecurityStrategy` (matched to `auth:sanctum`) once auth routes
+  exist.
+
 ## Testing
 
 - Pest. Create with `php artisan make:test --pest {Name}` (feature) or `--unit`.
