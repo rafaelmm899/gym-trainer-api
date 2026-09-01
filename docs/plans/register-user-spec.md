@@ -31,7 +31,8 @@ credentials) that login, logout and profile will build on.
 - Pest feature suite covering the four acceptance criteria + negative cases.
 
 **Out of scope:**
-- Login, logout, session refresh, password reset — separate tickets.
+- Standalone login / logout / session-refresh / password-reset endpoints —
+  separate tickets. (Session login triggered *by* sign-up is in scope, per AC #1.)
 - Email verification (`email_verified_at` stays `null`; no `Registered` event).
 - Token authentication / `HasApiTokens` / `personal_access_tokens` table.
 - Athlete profile, routines and any other domain table: the freshly created user
@@ -274,7 +275,12 @@ valid payload: `name` = `"Ada Lovelace"`, `email` = `"ada@example.com"`,
 - **When:** 7 consecutive `POST /api/v1/register` from the same IP (distinct emails)
 - **Expect:** the first 6 responses are `201`/`422` (not `429`); the 7th is `429`
 
-**TC-14 (arch, optional — outside the AC):** pipeline conventions
+**TC-14:** The CSRF-cookie handshake succeeds for an allowed origin
+- **Given:** the `api` group is stateful and `config('app.url')` is an allowed CORS origin (`FRONTEND_URL` / `SANCTUM_STATEFUL_DOMAINS` set per §6)
+- **When:** `GET /sanctum/csrf-cookie` with header `Origin: <config('app.url')>`
+- **Expect:** `204`; an `XSRF-TOKEN` cookie is set on the response (`assertCookie('XSRF-TOKEN')`); the response carries `Access-Control-Allow-Credentials: true` (`assertHeader('Access-Control-Allow-Credentials', 'true')`)
+
+**TC-15 (arch, optional — outside the AC):** pipeline conventions
 - **Given:** the project code
 - **When:** Pest architecture assertions run
 - **Expect:** `App\Actions\*` is `final` and has a `handle` method; `App\Http\Controllers\Auth\*` is invokable; `App\Http\Requests\*` extends `FormRequest`; `dd`/`dump`/`ray` are not used in `app/`
@@ -303,15 +309,16 @@ valid payload: `name` = `"Ada Lovelace"`, `email` = `"ada@example.com"`,
 | Scramble `security_strategy` | No change (`null`) | `register` is public; with the strategy off it is already documented as unsecured. It will be enabled (for cookie/apiKey, **not** bearer) when the first protected route exists. |
 | Tests: stateful session | `SANCTUM_STATEFUL_DOMAINS=localhost` + `APP_URL=http://localhost` in `phpunit.xml`; `Origin` header in every test | Without a stateful domain the `web` group is not injected and `session()->regenerate()` in the Action blows up. Exercises the real SPA path. CSRF auto-bypasses in tests. |
 | Tests: `RefreshDatabase` | Uncomment the global line in `tests/Pest.php` (scope `Feature`) | This is the first DB-touching test; every feature test after it needs it. |
-| Commit attribution | Follow `CLAUDE.md`: **no** `Co-Authored-By: Claude` / `Claude-Session:` trailers | `CLAUDE.md` is the repo contract and forbids it explicitly. No trailer check in `.github/`, but the contract governs. (Outside functional scope; noted for the commit phase.) |
 
 ---
 
 ## 10. Work Plan
 
 The pipeline classes are created before wiring `routes/api.php` (which references
-them). The Test Cases are implemented and run last (task 15); the DoD for tasks
-8–12 is limited to the artifact existing and passing Pint + PHPStan.
+them). Tasks 8–12 are **not independently shippable** — task 15 is the functional
+gate that exercises them end to end; their own DoD is limited to the artifact
+existing, passing Pint + PHPStan, and (where the class carries logic) a focused
+unit assertion.
 
 | # | Task | Definition of Done |
 |---|---|---|
@@ -322,14 +329,18 @@ them). The Test Cases are implemented and run last (task 15); the DoD for tasks
 | 5 | Publish and edit `config/cors.php` (`supports_credentials => true`, `allowed_origins` from `FRONTEND_URL`, `paths` with `api/*` and `sanctum/csrf-cookie`, `allowed_methods`/`allowed_headers` `['*']`) | The file exists with those values; PHPStan level 6 clean in `config/`. |
 | 6 | Publish `config/sanctum.php`, keep `stateful` (from env), `guard => ['web']`, `expiration => null` | The file exists; `config('sanctum.guard')` === `['web']`. |
 | 7 | Add `FRONTEND_URL`, `SANCTUM_STATEFUL_DOMAINS`, `SESSION_DOMAIN` to `.env.example` (and local `.env`) | `.env.example` contains the three keys with the §6 values; `config('sanctum.stateful')` resolves the expected list. |
-| 8 | Create `app/Http/Requests/Auth/RegisterRequest.php` (`authorize(): true`; `rules()` for `name` `['required','string','max:255']`, `email` `['required','string','email','max:255','unique:users,email']`, `password` `['required','confirmed', Password::min(8)]`; `prepareForValidation()` lowercases + `trim`s the email) | The file exists; Pint + PHPStan level 6 clean. |
+| 8 | Create `app/Http/Requests/Auth/RegisterRequest.php` (`authorize(): true`; `rules()` for `name` `['required','string','max:255']`, `email` `['required','string','email','max:255','unique:users,email']`, `password` `['required','confirmed', Password::min(8)]`; `prepareForValidation()` lowercases + `trim`s the email) | The file exists; Pint + PHPStan level 6 clean; a unit assertion that `prepareForValidation()` maps `'  Ada@Example.COM '` → `'ada@example.com'` passes. |
 | 9 | Create `app/Data/Auth/RegisterData.php` (readonly `string $name/$email/$password`, no `password_confirmation`) via `make:data`, move to `app/Data/Auth/`, fix the namespace | `RegisterData::from(['name'=>…,'email'=>…,'password'=>…])` builds the DTO; Pint + PHPStan clean. |
 | 10 | Create `app/Http/Resources/Auth/UserResource.php` (`toArray()` → `name`, `email`, `created_at` as ISO-8601; no `id`, no relations) | The file exists; Pint + PHPStan clean. |
-| 11 | Create `app/Actions/Auth/UserRegisterAction.php` (`final`, `handle(RegisterData $data): User` → `User::create([...])` → `Auth::login($user)` → `request()->session()->regenerate()` → `return $user`; no `DB::transaction`, no `Registered` event) | The file exists; Pint + PHPStan clean. |
+| 11 | Create `app/Actions/Auth/UserRegisterAction.php` (`final`, `handle(RegisterData $data): User` → `User::create([...])` → `Auth::login($user)` → `request()->session()->regenerate()` → `return $user`; no `DB::transaction`, no `Registered` event) | The file exists; Pint + PHPStan clean; a unit assertion that calling `handle()` (with a started session) creates one `users` row, hashes the password, and leaves `Auth::check()` true passes. |
 | 12 | Create `app/Http/Controllers/Auth/RegisterController.php` (`final`, `__invoke(RegisterRequest $request, UserRegisterAction $action): JsonResponse` → `RegisterData::from($request->validated())` → `$action->handle(...)` → `UserResource::make($user)->response()->setStatusCode(201)`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
 | 13 | Write `routes/api.php`: `Route::post('register', RegisterController::class)->middleware('throttle:6,1')->name('auth.register')` with `use App\Http\Controllers\Auth\RegisterController;` | `php artisan route:list` shows `POST api/v1/register` → `RegisterController` with `throttle:6,1` middleware; PHPStan clean in `routes/`. |
 | 14 | Uncomment `->use(RefreshDatabase::class)` in `tests/Pest.php`; add `SANCTUM_STATEFUL_DOMAINS=localhost` and `APP_URL=http://localhost` to `phpunit.xml` | `docker compose exec app vendor/bin/pest` starts without the DB `RuntimeException` or `Session store not set on request`; `ExampleTest` still green. |
-| 15 | Write `tests/Feature/Auth/RegisterTest.php` with TC-1..TC-13 (`beforeEach` sets `withHeader('Origin', config('app.url'))`) | `docker compose exec app vendor/bin/pest tests/Feature/Auth/RegisterTest.php` all green. |
-| 16 | (Optional, outside the AC) Add the arch test TC-14 (`tests/Arch/PipelineTest.php` or a shared arch file) | The arch test passes. |
+| 15 | Write `tests/Feature/Auth/RegisterTest.php` covering TC-1 through TC-14 inclusive (`beforeEach` sets `withHeader('Origin', config('app.url'))`) | `docker compose exec app vendor/bin/pest tests/Feature/Auth/RegisterTest.php` all green; each of TC-1…TC-14 has a corresponding test. |
+| 16 | (Optional, outside the AC) Add the arch test TC-15 (`tests/Arch/PipelineTest.php` or a shared arch file) | The arch test passes. |
 | 17 | `docker compose exec app composer check` (Pint `--test` + PHPStan level 6 + full Pest) | All three steps green. |
 | 18 | Manual check with `curl` against `http://localhost:8000` (`GET /sanctum/csrf-cookie` → `POST /api/v1/register` `201` with `Set-Cookie` → repeated email `422` on `email` → unconfirmed password `422` on `password`); review `GET /docs/api` | The `curl` calls return the expected codes; the endpoint appears in Scramble with the body inferred from `RegisterRequest` and the `201` response from `UserResource`. |
+
+*Process note: branches, commit messages and PR text follow `CLAUDE.md` /
+`AGENTS.md` — English only, no `Co-Authored-By: Claude` / `Claude-Session:`
+trailers.*
