@@ -1,0 +1,86 @@
+name: gym-trainer-api
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: docker/php/Dockerfile
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  image: gym-trainer-api/php:8.5
+  volumes:
+    - .:/var/www/html
+  env_file:
+    - .env
+  depends_on:
+    pgsql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - gym
+
+services:
+  app:
+    <<: *app
+    # default CMD: php-fpm
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${APP_PORT:-8000}:80"
+    volumes:
+      - .:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks:
+      - gym
+
+  queue:
+    <<: *app
+    command: php artisan queue:work --sleep=1 --tries=3 --max-time=3600
+    restart: unless-stopped
+
+  scheduler:
+    <<: *app
+    command: php artisan schedule:work
+    restart: unless-stopped
+
+  pgsql:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-gym_trainer}
+      POSTGRES_USER: ${DB_USERNAME:-gym}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${FORWARD_DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-gym} -d ${DB_DATABASE:-gym_trainer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gym
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gym
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  gym:
