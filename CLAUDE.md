@@ -236,6 +236,10 @@ docker compose exec app composer check           # pint --test + phpstan + pest
 ## Git
 
 - Feature branch → PR. Never commit directly to `main`.
+- **English only.** Branch names, commit messages, PR titles and descriptions,
+  code comments, and any new doc under `docs/` are written in English — never
+  Spanish. (The pre-existing `docs/product-context.md` and `docs/plans/` files
+  predate this rule; leave their language alone unless asked.)
 - **Commit messages carry no AI attribution.** Never add a
   `Co-Authored-By: Claude …` or `Claude-Session: …` trailer, and never push a
   commit that contains one. Subject + body only.

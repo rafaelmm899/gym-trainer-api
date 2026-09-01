@@ -1,47 +1,46 @@
-# Registro de usuario — `POST /api/v1/register`
+# User registration — `POST /api/v1/register`
 
-> Deriva del ticket de Notion "Registrarse en la aplicación" (Feature: Auth &
-> perfil · MVP · Must) y del plan aprobado. Contrato base: `docs/product-context.md`
-> y `docs/plans/data-model.md`.
+> Derived from the Notion ticket "Registrarse en la aplicación" (Feature: Auth &
+> perfil · MVP · Must) and the approved plan. Base contract:
+> `docs/product-context.md` and `docs/plans/data-model.md`.
 
 ## 1. Context
 
 **Kind:** Greenfield Feature
 
 **Stack:** PHP 8.5 · Laravel 13 · PostgreSQL 17 (runtime) / SQLite `:memory:` (tests) ·
-Pest 4 (`pest-plugin-laravel`) · `laravel/sanctum` 4 (nueva dependencia) ·
-`spatie/laravel-data` 4.23 · Pint · Larastan level 6. Todo corre en Docker.
+Pest 4 (`pest-plugin-laravel`) · `laravel/sanctum` 4 (new dependency) ·
+`spatie/laravel-data` 4.23 · Pint · Larastan level 6. Everything runs in Docker.
 
-**Problem statement:** El proyecto no tiene autenticación ni endpoints de API. Se
-necesita el primer endpoint: un visitante crea su cuenta con `name`, `email` y
-`password`, y queda autenticado por sesión (cookie) en la misma respuesta, para
-empezar a usar la aplicación con sus propios datos. Este ticket también levanta la
-infraestructura de API + auth desde cero (routing `/api/v1`, Sanctum en modo SPA,
-CORS con credenciales) sobre la que se construirán login, logout y perfil.
+**Problem statement:** The project has no authentication and no API endpoints. We
+need the first endpoint: a visitor creates their account with `name`, `email` and
+`password`, and is authenticated by session (cookie) in the same response, so they
+can start using the app with their own data. This ticket also stands up the API +
+auth infrastructure from zero (`/api/v1` routing, Sanctum in SPA mode, CORS with
+credentials) that login, logout and profile will build on.
 
 **In scope:**
-- Endpoint público `POST /api/v1/register` siguiendo el pipeline obligatorio de
-  `CLAUDE.md` (Form Request → Controller invokable → Action → JSON Resource).
-- Instalación y wiring de `laravel/sanctum` en **modo SPA / cookie stateful**
-  (sin tokens).
-- Wiring del grupo de rutas `api` con prefijo `/api/v1` en `bootstrap/app.php`.
-- `config/cors.php` con `supports_credentials`.
-- Normalización de email (minúsculas + trim) antes de la comprobación de unicidad.
-- Inicio de sesión por cookie tras el alta (`Auth::login` + regeneración de sesión).
-- Rate limiting `throttle:6,1` en la ruta.
-- Suite Pest de feature que cubre los 4 criterios de aceptación + casos negativos.
+- Public `POST /api/v1/register` endpoint following the mandatory `CLAUDE.md`
+  pipeline (Form Request → invokable Controller → Action → JSON Resource).
+- Install and wire `laravel/sanctum` in **SPA / stateful cookie mode** (no tokens).
+- Wire the `api` route group with the `/api/v1` prefix in `bootstrap/app.php`.
+- `config/cors.php` with `supports_credentials`.
+- Email normalisation (lowercase + trim) before the uniqueness check.
+- Session login after sign-up (`Auth::login` + session regeneration).
+- Rate limiting `throttle:6,1` on the route.
+- Pest feature suite covering the four acceptance criteria + negative cases.
 
 **Out of scope:**
-- Login, logout, refresh de sesión, recuperación de contraseña — tickets aparte.
-- Verificación de email (`email_verified_at` queda `null`; sin evento `Registered`).
-- Autenticación por token / `HasApiTokens` / tabla `personal_access_tokens`.
-- Perfil de atleta, rutinas y cualquier otra tabla de dominio: el usuario recién
-  creado no tiene nada más que su fila en `users` (AC #4 se cumple por construcción).
-- Endpoint `GET /api/v1/user` o `/profile`.
-- Activar `security_strategy` en `config/scramble.php` (se difiere a cuando exista
-  la primera ruta protegida).
-- SPA `gym-trainer-spa/` (repositorio separado).
-- Manejo transaccional de la carrera de email duplicado bajo concurrencia (ver §9).
+- Login, logout, session refresh, password reset — separate tickets.
+- Email verification (`email_verified_at` stays `null`; no `Registered` event).
+- Token authentication / `HasApiTokens` / `personal_access_tokens` table.
+- Athlete profile, routines and any other domain table: the freshly created user
+  has nothing beyond its `users` row (AC #4 is satisfied by construction).
+- `GET /api/v1/user` or `/profile` endpoint.
+- Enabling `security_strategy` in `config/scramble.php` (deferred until the first
+  protected route exists).
+- The `gym-trainer-spa/` frontend (separate repository).
+- Transactional handling of the duplicate-email race under concurrency (see §9).
 
 ---
 
@@ -51,17 +50,17 @@ CORS con credenciales) sobre la que se construirán login, logout y perfil.
 
 | Method | Path | Auth | Request | Response | Status codes |
 |---|---|---|---|---|---|
-| POST | `/api/v1/register` | Ninguna (ruta pública). Sujeta a `EnsureFrontendRequestsAreStateful` + CSRF por venir en el grupo `api` stateful, y a `throttle:6,1`. | JSON: `name` (string, req, ≤255), `email` (string, req, email, ≤255, único), `password` (string, req, ≥8, `confirmed`), `password_confirmation` (string, req, == `password`) | `201`: `{ "data": { "name": string, "email": string, "created_at": string ISO-8601 } }`. La respuesta setea la cookie de sesión (`config('session.cookie')`) y refresca `XSRF-TOKEN`. | `201` alta correcta y sesión iniciada · `422` validación (email ya registrado → error en `email`; password sin confirmar o `<8` → error en `password`; `name`/`email`/`password` ausentes o con formato inválido) · `429` rate limit excedido · `419` petición stateful sin token CSRF válido (cliente no llamó antes a `GET /sanctum/csrf-cookie`) |
+| POST | `/api/v1/register` | None (public route). Subject to `EnsureFrontendRequestsAreStateful` + CSRF because it sits in the stateful `api` group, and to `throttle:6,1`. | JSON: `name` (string, required, ≤255), `email` (string, required, email, ≤255, unique), `password` (string, required, ≥8, `confirmed`), `password_confirmation` (string, required, == `password`) | `201`: `{ "data": { "name": string, "email": string, "created_at": string ISO-8601 } }`. The response sets the session cookie (`config('session.cookie')`) and refreshes `XSRF-TOKEN`. | `201` created and session started · `422` validation (email already registered → error on `email`; password unconfirmed or `<8` → error on `password`; `name`/`email`/`password` missing or malformed) · `429` rate limit exceeded · `419` stateful request without a valid CSRF token (client did not call `GET /sanctum/csrf-cookie` first) |
 
-Notas:
-- El body **no** expone `id`. `docs/plans/data-model.md` fija que `users` no lleva
-  `uuid` en v1 y que el `bigint` PK nunca cruza la frontera de la API ("la API solo
-  opera sobre el usuario autenticado, nunca por id").
-- `GET /sanctum/csrf-cookie` lo registra `SanctumServiceProvider` en la raíz de la
-  app (no bajo `/api/v1`). No se define a mano. Un cliente navegador real debe
-  llamarlo antes del `POST`.
-- Errores renderizados como JSON por el handler de excepciones (ya configurado en
-  `bootstrap/app.php` para `api/*`). Sin JSON construido a mano.
+Notes:
+- The body **does not** expose `id`. `docs/plans/data-model.md` states that `users`
+  carries no `uuid` in v1 and that the `bigint` PK never crosses the API boundary
+  ("the API only ever operates on the authenticated user, never by id").
+- `GET /sanctum/csrf-cookie` is registered by `SanctumServiceProvider` at the app
+  root (not under `/api/v1`). It is not defined by hand. A real browser client
+  must call it before the `POST`.
+- Errors are rendered as JSON by the exception handler (already configured in
+  `bootstrap/app.php` for `api/*`). No hand-built JSON.
 
 ### 2.2 CLI
 
@@ -71,11 +70,11 @@ Not applicable — no CLI commands.
 
 | Event name | Producer | Consumer | Payload | Trigger condition |
 |---|---|---|---|---|
-| `Illuminate\Auth\Events\Login` | `Auth::login($user)` dentro de `UserRegisterAction` | Ninguno (sin listeners del proyecto) | guard (`web`), `User`, `remember` (false) | Se dispara automáticamente al iniciar sesión tras el alta |
+| `Illuminate\Auth\Events\Login` | `Auth::login($user)` inside `UserRegisterAction` | None (no project listeners) | guard (`web`), `User`, `remember` (false) | Fired automatically when the session starts after sign-up |
 
-`Illuminate\Auth\Events\Registered` **no** se dispara: solo tiene efecto con
-`User implements MustVerifyEmail` + listener, y la verificación de email está fuera
-de alcance. Es un añadido de una línea en el Action si se introduce más adelante.
+`Illuminate\Auth\Events\Registered` is **not** fired: it only does anything with
+`User implements MustVerifyEmail` + a listener, and email verification is out of
+scope. It is a one-line addition to the Action if introduced later.
 
 ---
 
@@ -83,8 +82,8 @@ de alcance. Es un añadido de una línea en el Action si se introduce más adela
 
 ### 3.1 Pages
 
-Not applicable — no pages affected. Es una API REST JSON; el frontend vive en el
-repositorio `gym-trainer-spa/`, fuera de este ticket.
+Not applicable — no pages affected. This is a JSON REST API; the frontend lives in
+the `gym-trainer-spa/` repository, outside this ticket.
 
 ### 3.2 Components
 
@@ -94,13 +93,13 @@ Not applicable — no components affected.
 
 ## 4. Database
 
-Not applicable — no data or schema changes. El endpoint usa las tablas stock
-`users`, `sessions` y `password_reset_tokens` (creadas por
-`0001_01_01_000000_create_users_table.php`) tal cual. `php artisan install:api`
-publica una migración `*_create_personal_access_tokens_table.php` que se **elimina
-sin ejecutar** (modo SPA-only nunca emite tokens). Resultado: este feature añade
-**cero migraciones**, por lo que no aplica el workflow de aislamiento de BD de
-`CLAUDE.md` (clonar `gym_trainer`).
+Not applicable — no data or schema changes. The endpoint uses the stock `users`,
+`sessions` and `password_reset_tokens` tables (created by
+`0001_01_01_000000_create_users_table.php`) as-is. `php artisan install:api`
+publishes a `*_create_personal_access_tokens_table.php` migration that is
+**deleted without running** (SPA-only mode never issues tokens). Result: this
+feature adds **zero migrations**, so the `CLAUDE.md` database-isolation workflow
+(cloning `gym_trainer`) does not apply.
 
 ### 4.1 Schema changes
 
@@ -116,76 +115,76 @@ Not applicable — no seeds.
 
 ### 5.1 Authentication
 
-**Method:** Session (cookie) vía **Laravel Sanctum en modo SPA / stateful**.
+**Method:** Session (cookie) via **Laravel Sanctum in SPA / stateful mode**.
 
-Flujo:
-1. `install:api --stateful` añade `$middleware->statefulApi()` en
-   `bootstrap/app.php`, que antepone `EnsureFrontendRequestsAreStateful` al grupo
-   `api`. Para una petición cuyo `Origin`/`Referer` esté en
-   `config('sanctum.stateful')`, ese middleware inyecta el grupo `web`
+Flow:
+1. `install:api --stateful` adds `$middleware->statefulApi()` in
+   `bootstrap/app.php`, which prepends `EnsureFrontendRequestsAreStateful` to the
+   `api` group. For a request whose `Origin`/`Referer` host is in
+   `config('sanctum.stateful')`, that middleware injects the `web` group
    (`EncryptCookies`, `StartSession`, `ValidateCsrfToken`,
    `AddQueuedCookiesToResponse`).
-2. `UserRegisterAction` crea el `User`, llama `Auth::login($user)` (guard por
-   defecto `web`) y luego `request()->session()->regenerate()`.
-3. `StartSession` / `AddQueuedCookiesToResponse` emiten la cookie de sesión y el
-   `XSRF-TOKEN` refrescado en la respuesta `201` → el usuario queda autenticado
-   para las siguientes peticiones sin llamada a `/login` (AC #1).
+2. `UserRegisterAction` creates the `User`, calls `Auth::login($user)` (default
+   `web` guard), then `request()->session()->regenerate()`.
+3. `StartSession` / `AddQueuedCookiesToResponse` emit the session cookie and the
+   refreshed `XSRF-TOKEN` on the `201` response → the user is authenticated for
+   subsequent requests with no separate `/login` call (AC #1).
 
-Decisiones de configuración:
-- **Sin guard `api`** en `config/auth.php`. La auth SPA monta sobre el guard `web`
-  de sesión existente. `config('sanctum.guard')` = `['web']` (default).
-- **Sin `HasApiTokens`** en el modelo `User`.
-- `config('sanctum.expiration')` = `null` (la vida la marca la sesión).
-- CORS: `supports_credentials => true` y `allowed_origins` explícito (nunca `*`
-  con credenciales) — ver §6.
-- En el entorno de test, `ValidateCsrfToken` se auto-bypassa
-  (`runningUnitTests()`), pero el dominio stateful debe estar configurado para que
-  la sesión se inicialice (ver §6 y §8).
+Configuration decisions:
+- **No `api` guard** in `config/auth.php`. SPA auth rides the existing `web`
+  session guard. `config('sanctum.guard')` = `['web']` (default).
+- **No `HasApiTokens`** on the `User` model.
+- `config('sanctum.expiration')` = `null` (lifetime is the session's).
+- CORS: `supports_credentials => true` and an explicit `allowed_origins` (never
+  `*` with credentials) — see §6.
+- In the test environment, `ValidateCsrfToken` auto-bypasses
+  (`runningUnitTests()`), but the stateful domain must be configured so the
+  session initialises (see §6 and §8).
 
 ### 5.2 Authorization
 
-Not applicable — no authorization changes. La ruta es pública: sin actor, sin
-recurso, sin Policy. Es la **excepción explícita** a la regla 4 de `CLAUDE.md`
-("every data route: `auth:sanctum` + a Policy") — se documenta como tal en
-`routes/api.php`. `RegisterRequest::authorize()` devuelve `true`.
+Not applicable — no authorization changes. The route is public: no actor, no
+resource, no Policy. It is the **explicit exception** to `CLAUDE.md` rule 4
+("every data route: `auth:sanctum` + a Policy") — documented as such in
+`routes/api.php`. `RegisterRequest::authorize()` returns `true`.
 
 ---
 
 ## 6. Configuration
 
-**Environment variables** (`.env.example` + `.env` local):
+**Environment variables** (`.env.example` + local `.env`):
 
 | Variable | Value / Source | Purpose |
 |---|---|---|
-| `FRONTEND_URL` | `http://localhost:5173` | Origen permitido en CORS (`config/cors.php` → `allowed_origins`). |
-| `SANCTUM_STATEFUL_DOMAINS` | `localhost:5173,localhost:8000,127.0.0.1:5173,127.0.0.1:8000` | Hosts cuyas peticiones se tratan como stateful (sesión + CSRF). |
-| `SESSION_DOMAIN` | `localhost` (dev). Prod: dominio registrable real, p. ej. `.example.com` | Ámbito de la cookie de sesión. Hoy está en `null`. |
-| `AUTH_GUARD` | **No se añade** (o comentado con valor `web`) | `Auth::login()` apunta a `config('auth.defaults.guard')`; ponerlo en `sanctum` rompería el login stateful en silencio. |
+| `FRONTEND_URL` | `http://localhost:5173` | Allowed origin in CORS (`config/cors.php` → `allowed_origins`). |
+| `SANCTUM_STATEFUL_DOMAINS` | `localhost:5173,localhost:8000,127.0.0.1:5173,127.0.0.1:8000` | Hosts whose requests are treated as stateful (session + CSRF). |
+| `SESSION_DOMAIN` | `localhost` (dev). Prod: real registrable domain, e.g. `.example.com` | Session cookie scope. Currently `null`. |
+| `AUTH_GUARD` | **Not added** (or commented, value `web`) | `Auth::login()` targets `config('auth.defaults.guard')`; setting it to `sanctum` would silently break stateful login. |
 
-**Prod (documentar, no se toca en este ticket):** `SESSION_SECURE_COOKIE=true`,
-HTTPS, `SESSION_SAME_SITE=lax` (revisar), `SESSION_DOMAIN` con el dominio real.
+**Prod (document, not touched in this ticket):** `SESSION_SECURE_COOKIE=true`,
+HTTPS, `SESSION_SAME_SITE=lax` (review), `SESSION_DOMAIN` set to the real domain.
 
 **Test env** (`phpunit.xml`):
 
 | Variable | Value | Purpose |
 |---|---|---|
-| `SANCTUM_STATEFUL_DOMAINS` | `localhost` | Sin esto, `postJson` (sin `Origin`) no dispara el grupo `web`, `StartSession` no corre y `session()->regenerate()` en el Action lanza `RuntimeException: Session store not set on request`. |
-| `APP_URL` | `http://localhost` | Determinismo: el header `Origin` que envían los tests y `SANCTUM_STATEFUL_DOMAINS` deben coincidir en host. |
+| `SANCTUM_STATEFUL_DOMAINS` | `localhost` | Without it, `postJson` (no `Origin`) does not trigger the `web` group, `StartSession` never runs, and `session()->regenerate()` in the Action throws `RuntimeException: Session store not set on request`. |
+| `APP_URL` | `http://localhost` | Determinism: the `Origin` header the tests send and `SANCTUM_STATEFUL_DOMAINS` must agree on host. |
 
-**Archivos de configuración modificados:**
+**Config files modified:**
 
-| Archivo | Cambio |
+| File | Change |
 |---|---|
 | `composer.json` / `composer.lock` | `require laravel/sanctum ^4`. |
-| `bootstrap/app.php` | `withRouting(...)`: añadir `api: __DIR__.'/../routes/api.php'` y `apiPrefix: 'api/v1'`. `withMiddleware(...)`: `$middleware->statefulApi();`. `withExceptions(...)` sin cambios. |
-| `routes/api.php` | Nuevo. Una ruta: `Route::post('register', RegisterController::class)->middleware('throttle:6,1')->name('auth.register');` con `use` de la clase (PHPStan analiza `routes/`). |
-| `config/cors.php` | Publicar. `paths => ['api/*', 'sanctum/csrf-cookie']`; `allowed_methods => ['*']`; `allowed_origins => [env('FRONTEND_URL', 'http://localhost:5173')]`; `allowed_headers => ['*']`; `supports_credentials => true`. |
-| `config/sanctum.php` | Publicar. Dejar visibles `stateful` (de `SANCTUM_STATEFUL_DOMAINS`), `guard => ['web']`, `expiration => null`. Resto stock. |
-| `config/auth.php` | Sin cambios. |
-| `config/scramble.php` | Sin cambios (`security_strategy => null`). |
-| `tests/Pest.php` | Descomentar `->use(RefreshDatabase::class)` (scope `Feature`). |
-| `phpunit.xml` | Añadir los dos `<env>` de la tabla de test. |
-| `database/migrations/*_create_personal_access_tokens_table.php` | **Borrar** (publicada por `install:api`, no se ejecuta). |
+| `bootstrap/app.php` | `withRouting(...)`: add `api: __DIR__.'/../routes/api.php'` and `apiPrefix: 'api/v1'`. `withMiddleware(...)`: `$middleware->statefulApi();`. `withExceptions(...)` unchanged. |
+| `routes/api.php` | New. One route: `Route::post('register', RegisterController::class)->middleware('throttle:6,1')->name('auth.register');` with a `use` for the class (PHPStan analyses `routes/`). |
+| `config/cors.php` | Publish. `paths => ['api/*', 'sanctum/csrf-cookie']`; `allowed_methods => ['*']`; `allowed_origins => [env('FRONTEND_URL', 'http://localhost:5173')]`; `allowed_headers => ['*']`; `supports_credentials => true`. |
+| `config/sanctum.php` | Publish. Keep visible `stateful` (from `SANCTUM_STATEFUL_DOMAINS`), `guard => ['web']`, `expiration => null`. Rest stock. |
+| `config/auth.php` | No change. |
+| `config/scramble.php` | No change (`security_strategy => null`). |
+| `tests/Pest.php` | Uncomment `->use(RefreshDatabase::class)` (scope `Feature`). |
+| `phpunit.xml` | Add the two `<env>` entries from the test table. |
+| `database/migrations/*_create_personal_access_tokens_table.php` | **Delete** (published by `install:api`, not run). |
 
 ---
 
@@ -193,92 +192,92 @@ HTTPS, `SESSION_SAME_SITE=lax` (revisar), `SESSION_DOMAIN` con el dominio real.
 
 | Behavior | Current | New |
 |---|---|---|
-| Alta de usuario | No existe. `users` solo se puebla por `DatabaseSeeder` / factory. | `POST /api/v1/register` crea la cuenta, inicia sesión por cookie y devuelve `201` con `{ data: { name, email, created_at } }`. |
-| Routing de API | `bootstrap/app.php` solo registra `web`, `console`, `health`. No hay `routes/api.php` ni prefijo `/api`. | Grupo `api` registrado con prefijo `/api/v1` y middleware `statefulApi()`. |
-| Autenticación | Ninguna. `config/auth.php` stock (guard `web` sin uso). Sanctum no instalado. | Sanctum SPA (cookie + CSRF) sobre el guard `web`. `GET /sanctum/csrf-cookie` disponible. |
-| CORS | Sin `config/cors.php` (defaults del framework, sin credenciales). | `config/cors.php` publicado con `supports_credentials => true` y origen explícito. |
-| Normalización de email | N/A | Email pasado a minúsculas + trim en `prepareForValidation()` antes del check `unique`; se persiste normalizado. |
-| Rate limiting | El grupo `api` no existe, sin throttle. | `throttle:6,1` en la ruta de registro (`429` al exceder). |
-| Tests que tocan BD | `RefreshDatabase` comentado en `tests/Pest.php`; solo `ExampleTest`. | `RefreshDatabase` activo para `Feature`; suite `tests/Feature/Auth/RegisterTest.php`. |
+| User sign-up | Does not exist. `users` is only populated by `DatabaseSeeder` / factory. | `POST /api/v1/register` creates the account, starts a cookie session and returns `201` with `{ data: { name, email, created_at } }`. |
+| API routing | `bootstrap/app.php` only registers `web`, `console`, `health`. No `routes/api.php`, no `/api` prefix. | `api` group registered with the `/api/v1` prefix and `statefulApi()` middleware. |
+| Authentication | None. `config/auth.php` is stock (`web` guard unused). Sanctum not installed. | Sanctum SPA (cookie + CSRF) over the `web` guard. `GET /sanctum/csrf-cookie` available. |
+| CORS | No `config/cors.php` (framework defaults, no credentials). | `config/cors.php` published with `supports_credentials => true` and an explicit origin. |
+| Email normalisation | N/A | Email lowercased + trimmed in `prepareForValidation()` before the `unique` check; persisted normalised. |
+| Rate limiting | The `api` group does not exist, no throttle. | `throttle:6,1` on the registration route (`429` on exceed). |
+| DB-touching tests | `RefreshDatabase` commented out in `tests/Pest.php`; only `ExampleTest`. | `RefreshDatabase` active for `Feature`; suite `tests/Feature/Auth/RegisterTest.php`. |
 
 ---
 
 ## 8. Test Cases
 
-Ejecutables con Pest 4 sobre SQLite `:memory:` (`RefreshDatabase`). `beforeEach`
-fija `$this->withHeader('Origin', config('app.url'))` para que la petición sea
-stateful. Payload válido base: `name` = `"Ada Lovelace"`, `email` =
-`"ada@example.com"`, `password` = `password_confirmation` = `"secret-password"`.
+Executable with Pest 4 on SQLite `:memory:` (`RefreshDatabase`). `beforeEach` sets
+`$this->withHeader('Origin', config('app.url'))` so the request is stateful. Base
+valid payload: `name` = `"Ada Lovelace"`, `email` = `"ada@example.com"`,
+`password` = `password_confirmation` = `"secret-password"`.
 
-**TC-1:** Alta correcta crea el usuario y lo deja autenticado
-- **Given:** ningún usuario con `email` `ada@example.com`
-- **When:** `POST /api/v1/register` con el payload válido base
-- **Expect:** `201`; `assertAuthenticated()` (guard `web`); `assertDatabaseHas('users', ['email' => 'ada@example.com', 'name' => 'Ada Lovelace'])`; `assertDatabaseCount('users', 1)`; `Hash::check('secret-password', User::first()->password)` es `true`; `assertJsonPath('data.email', 'ada@example.com')` y `assertJsonPath('data.name', 'Ada Lovelace')`
+**TC-1:** A valid sign-up creates the user and authenticates them
+- **Given:** no user with `email` `ada@example.com`
+- **When:** `POST /api/v1/register` with the base valid payload
+- **Expect:** `201`; `assertAuthenticated()` (`web` guard); `assertDatabaseHas('users', ['email' => 'ada@example.com', 'name' => 'Ada Lovelace'])`; `assertDatabaseCount('users', 1)`; `Hash::check('secret-password', User::first()->password)` is `true`; `assertJsonPath('data.email', 'ada@example.com')` and `assertJsonPath('data.name', 'Ada Lovelace')`
 
-**TC-2:** La respuesta del alta setea la cookie de sesión
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con el payload válido base
-- **Expect:** `201`; `assertCookie(config('session.cookie'))` (o cabecera `Set-Cookie` presente)
+**TC-2:** The sign-up response sets the session cookie
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with the base valid payload
+- **Expect:** `201`; `assertCookie(config('session.cookie'))` (or a `Set-Cookie` header present)
 
-**TC-3:** El email se normaliza a minúsculas y se persiste normalizado
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con `email` = `"  Ada@Example.COM  "`
+**TC-3:** The email is normalised to lowercase and persisted normalised
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with `email` = `"  Ada@Example.COM  "`
 - **Expect:** `201`; `assertDatabaseHas('users', ['email' => 'ada@example.com'])`; `assertJsonPath('data.email', 'ada@example.com')`
 
-**TC-4:** Email ya registrado → `422` con error en `email`
+**TC-4:** Already-registered email → `422` with an error on `email`
 - **Given:** `User::factory()->create(['email' => 'taken@example.com'])`
-- **When:** `POST /api/v1/register` con `email` = `"taken@example.com"` y el resto del payload válido
+- **When:** `POST /api/v1/register` with `email` = `"taken@example.com"` and the rest of the valid payload
 - **Expect:** `422`; `assertJsonValidationErrors('email')`; `assertDatabaseCount('users', 1)`; `assertGuest()`
 
-**TC-5:** Email ya registrado con distinta capitalización → `422` con error en `email`
+**TC-5:** Already-registered email with different casing → `422` with an error on `email`
 - **Given:** `User::factory()->create(['email' => 'taken@example.com'])`
-- **When:** `POST /api/v1/register` con `email` = `"TAKEN@example.com"`
+- **When:** `POST /api/v1/register` with `email` = `"TAKEN@example.com"`
 - **Expect:** `422`; `assertJsonValidationErrors('email')`; `assertDatabaseCount('users', 1)`
 
-**TC-6:** Contraseña que no coincide con su confirmación → `422` en `password`
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con `password` = `"secret-password"` y `password_confirmation` = `"other-password"`
+**TC-6:** Password that does not match its confirmation → `422` on `password`
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with `password` = `"secret-password"` and `password_confirmation` = `"other-password"`
 - **Expect:** `422`; `assertJsonValidationErrors('password')`; `assertDatabaseCount('users', 0)`; `assertGuest()`
 
-**TC-7:** Contraseña más corta que el mínimo (8) → `422` en `password`
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con `password` = `password_confirmation` = `"short"`
+**TC-7:** Password shorter than the minimum (8) → `422` on `password`
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with `password` = `password_confirmation` = `"short"`
 - **Expect:** `422`; `assertJsonValidationErrors('password')`; `assertGuest()`
 
-**TC-8:** Falta `name` → `422` en `name`
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` sin `name`
+**TC-8:** Missing `name` → `422` on `name`
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` without `name`
 - **Expect:** `422`; `assertJsonValidationErrors('name')`
 
-**TC-9:** Email ausente o con formato inválido → `422` en `email` (dataset: `null`, `"not-an-email"`)
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con cada valor del dataset como `email`
+**TC-9:** Missing or malformed email → `422` on `email` (dataset: `null`, `"not-an-email"`)
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with each dataset value as `email`
 - **Expect:** `422`; `assertJsonValidationErrors('email')`
 
-**TC-10:** Falta `password` → `422` en `password`
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` sin `password` ni `password_confirmation`
+**TC-10:** Missing `password` → `422` on `password`
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` without `password` or `password_confirmation`
 - **Expect:** `422`; `assertJsonValidationErrors('password')`
 
-**TC-11:** La respuesta no expone el id interno
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con el payload válido base
+**TC-11:** The response does not expose the internal id
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with the base valid payload
 - **Expect:** `201`; `assertJsonMissingPath('data.id')`; `assertJsonStructure(['data' => ['name', 'email', 'created_at']])`
 
-**TC-12:** El usuario recién creado no tiene perfil de atleta ni rutinas
-- **Given:** ningún usuario con ese email
-- **When:** `POST /api/v1/register` con el payload válido base
-- **Expect:** `201`; `assertDatabaseCount('users', 1)`; el body no incluye `profile` ni `routines`. Comentario en el test: AC #4 se cumple por construcción (el registro no crea nada salvo la fila `users`); este caso ganará aserciones reales (`$user->athleteProfile()->exists()` falso, `$user->routines()->count() === 0`) cuando existan los dominios Profile / Routine.
+**TC-12:** A freshly registered user has no athlete profile and no routines
+- **Given:** no user with that email
+- **When:** `POST /api/v1/register` with the base valid payload
+- **Expect:** `201`; `assertDatabaseCount('users', 1)`; the body includes no `profile` or `routines`. Comment in the test: AC #4 holds by construction (registration creates nothing beyond the `users` row); this case will gain real assertions (`$user->athleteProfile()->exists()` false, `$user->routines()->count() === 0`) once the Profile / Routine domains exist.
 
-**TC-13:** Rate limiting en la ruta de registro
-- **Given:** ningún usuario previo
-- **When:** se envían 7 `POST /api/v1/register` seguidos desde la misma IP (emails distintos)
-- **Expect:** las primeras 6 respuestas son `201`/`422` (no `429`); la 7.ª es `429`
+**TC-13:** Rate limiting on the registration route
+- **Given:** no prior user
+- **When:** 7 consecutive `POST /api/v1/register` from the same IP (distinct emails)
+- **Expect:** the first 6 responses are `201`/`422` (not `429`); the 7th is `429`
 
-**TC-14 (arch, opcional — fuera de los AC):** convenciones del pipeline
-- **Given:** el código del proyecto
-- **When:** se ejecutan aserciones de arquitectura Pest
-- **Expect:** `App\Actions\*` es `final` y tiene método `handle`; `App\Http\Controllers\Auth\*` es invokable; `App\Http\Requests\*` extiende `FormRequest`; `dd`/`dump`/`ray` no se usan en `app/`
+**TC-14 (arch, optional — outside the AC):** pipeline conventions
+- **Given:** the project code
+- **When:** Pest architecture assertions run
+- **Expect:** `App\Actions\*` is `final` and has a `handle` method; `App\Http\Controllers\Auth\*` is invokable; `App\Http\Requests\*` extends `FormRequest`; `dd`/`dump`/`ray` are not used in `app/`
 
 ---
 
@@ -286,51 +285,51 @@ stateful. Payload válido base: `name` = `"Ada Lovelace"`, `email` =
 
 | Decision area | What was decided | Why |
 |---|---|---|
-| Path / versionado | `POST /api/v1/register` con prefijo global `apiPrefix: 'api/v1'` | `CLAUDE.md` regla 1 exige `/api/v1`. El ticket ("`POST /api/register`") se interpreta como "la ruta de registro", no literal. |
-| Campo `name` | Requerido en el request (`string`, `max:255`) | La columna stock `users.name` es NOT NULL; requerirlo evita una migración y es lo habitual en una pantalla de registro. |
-| Mecanismo de auth | `laravel/sanctum` en modo SPA / cookie stateful; sin tokens; sin `HasApiTokens` | `docs/product-context.md` y `docs/plans/data-model.md` fijan "Sanctum modo SPA (cookie + CSRF)". El AC #1 pide sesión por cookie. |
-| Guard | Reusar el guard `web` de sesión; sin guard `api` en `config/auth.php` | La auth SPA de Sanctum monta sobre la sesión; `config('sanctum.guard')` = `['web']` por defecto. Añadir un guard sería indirección inútil (regla 6). |
-| Capa de Service | **No** se crea Service; el Action llama `User::create()` directamente | No hay conocimiento de negocio: unicidad = regla `unique:` (Form Request), hash = cast `hashed` del modelo, "sin perfil/rutinas" = no hacer nada. `CLAUDE.md` regla 6 + ejemplo `RoutineCreateAction`. |
-| Ubicación de `Auth::login()` + `session()->regenerate()` | En `UserRegisterAction`, tras `User::create()` | El Action es la única capa que dispara efectos/eventos (`Login`); "crear + autenticar" es un caso de uso indivisible. El controller conserva status 201 y shape (Resource). Usa el helper `request()`, no un `Request` inyectado. |
-| Evento `Registered` | No se dispara en v1 | Sin `MustVerifyEmail` ni listener no hace nada; verificación de email fuera de alcance (regla 5). `Auth::login()` ya dispara `Login`. |
-| Contenido del Resource | `UserResource` expone `name`, `email`, `created_at` (ISO-8601). **Sin `id`**. Ubicado en `app/Http/Resources/Auth/` | `docs/plans/data-model.md`: `users` no lleva `uuid` en v1 y el `bigint` PK no cruza la API. `created_at` como string explícito para que Scramble infiera `type: string`. |
-| DTO | `App\Data\Auth\RegisterData` (`spatie/laravel-data`), readonly `name/email/password`, sin `password_confirmation`; `RegisterData::from($request->validated())` | Convención de `CLAUDE.md` (writes toman un `Data` object). `validation_strategy` = `OnlyRequests` → construir desde el array validado no revalida; el Form Request es la única autoridad de validación. |
-| Regla de contraseña | `Password::min(8)` (solo longitud; sin complejidad, sin HIBP) ni configuración global | El AC #3 solo pide "longitud mínima"; 8 es el piso estándar de Laravel. Se puede endurecer en el ticket de login. |
-| Normalización de email | `prepareForValidation()` baja a minúsculas + `trim` antes del check `unique`; se persiste normalizado | Evita cuentas duplicadas por capitalización; `Ada@X.com` colisiona con `ada@x.com` → `422`. |
-| Rate limiting | `throttle:6,1` en la ruta | Endpoint público, no autenticado y de escritura: blanco de abuso. Valor alineado con el default de Laravel para rutas de auth. |
-| Carrera de email duplicado | Solo validación (`unique:` + índice único). Se acepta que, bajo dos requests concurrentes con el mismo email, uno pueda devolver `500` (violación única 23505) en vez de `422`. Riesgo documentado. | En v1 (tráfico bajo) la colisión exacta es improbable; capturar la `QueryException` en el Action añade complejidad no justificada ahora. Se puede endurecer si el tráfico lo exige. |
-| Migración `personal_access_tokens` | Borrar la publicada por `install:api` sin ejecutarla → cero migraciones | Modo SPA-only nunca emite tokens; Sanctum 4 no auto-carga migraciones del paquete. Evita el workflow de clonado de BD de `CLAUDE.md`. |
-| CORS | `config/cors.php` publicado: `supports_credentials => true`, `allowed_origins` explícito (nunca `*`), `paths` con `api/*` y `sanctum/csrf-cookie` | Sin credenciales el navegador descarta el `Set-Cookie` del registro. El spec CORS prohíbe `*` con credenciales. |
-| Scramble `security_strategy` | Sin cambios (`null`) | `register` es público; con la estrategia apagada ya se documenta como sin seguridad. Se activará (para cookie/apiKey, **no** bearer) cuando exista la primera ruta protegida. |
-| Tests: sesión stateful | `SANCTUM_STATEFUL_DOMAINS=localhost` + `APP_URL=http://localhost` en `phpunit.xml`; header `Origin` en cada test | Sin dominio stateful el grupo `web` no se inyecta y `session()->regenerate()` en el Action revienta. Se ejercita el camino real del SPA. CSRF se auto-bypassa en test. |
-| Tests: `RefreshDatabase` | Descomentar la línea global en `tests/Pest.php` (scope `Feature`) | Es el primer test que toca BD; todos los feature tests siguientes lo necesitan. |
-| Atribución en commits | Seguir `CLAUDE.md`: **sin** trailers `Co-Authored-By: Claude` / `Claude-Session:` | `CLAUDE.md` es el contrato del repo y lo prohíbe explícitamente. No hay check de trailer en `.github/`, pero el contrato manda. (Fuera del alcance funcional; se anota para la fase de commit.) |
+| Path / versioning | `POST /api/v1/register` with a global `apiPrefix: 'api/v1'` | `CLAUDE.md` rule 1 requires `/api/v1`. The ticket ("`POST /api/register`") is read as "the registration route", not a literal path. |
+| `name` field | Required in the request (`string`, `max:255`) | The stock `users.name` column is NOT NULL; requiring it avoids a migration and matches a typical sign-up screen. |
+| Auth mechanism | `laravel/sanctum` in SPA / stateful cookie mode; no tokens; no `HasApiTokens` | `docs/product-context.md` and `docs/plans/data-model.md` fix "Sanctum SPA mode (cookie + CSRF)". AC #1 asks for a cookie session. |
+| Guard | Reuse the `web` session guard; no `api` guard in `config/auth.php` | Sanctum SPA auth rides the session; `config('sanctum.guard')` = `['web']` by default. Adding a guard would be useless indirection (rule 6). |
+| Service layer | **No** Service; the Action calls `User::create()` directly | No business knowledge: uniqueness = `unique:` rule (Form Request), hashing = the model's `hashed` cast, "no profile/routines" = do nothing. `CLAUDE.md` rule 6 + the `RoutineCreateAction` example. |
+| Where `Auth::login()` + `session()->regenerate()` go | In `UserRegisterAction`, after `User::create()` | The Action is the only layer that fires side effects/events (`Login`); "create + authenticate" is one indivisible use case. The controller keeps the 201 status and the shape (Resource). Uses the `request()` helper, not an injected `Request`. |
+| `Registered` event | Not fired in v1 | Without `MustVerifyEmail` or a listener it does nothing; email verification is out of scope (rule 5). `Auth::login()` already fires `Login`. |
+| Resource contents | `UserResource` exposes `name`, `email`, `created_at` (ISO-8601). **No `id`**. Located at `app/Http/Resources/Auth/` | `docs/plans/data-model.md`: `users` has no `uuid` in v1 and the `bigint` PK does not cross the API. `created_at` as an explicit string so Scramble infers `type: string`. |
+| DTO | `App\Data\Auth\RegisterData` (`spatie/laravel-data`), readonly `name/email/password`, no `password_confirmation`; `RegisterData::from($request->validated())` | `CLAUDE.md` convention (writes take a `Data` object). `validation_strategy` = `OnlyRequests` → building from the validated array does not re-validate; the Form Request is the single validation authority. |
+| Password rule | `Password::min(8)` (length only; no complexity, no HIBP) and no global configuration | AC #3 only asks for "a minimum length"; 8 is Laravel's standard floor. Can be hardened in the login ticket. |
+| Email normalisation | `prepareForValidation()` lowercases + `trim`s before the `unique` check; persisted normalised | Avoids duplicate accounts from casing; `Ada@X.com` collides with `ada@x.com` → `422`. |
+| Rate limiting | `throttle:6,1` on the route | Public, unauthenticated, write endpoint: an abuse target. Value aligned with Laravel's default for auth routes. |
+| Duplicate-email race | Validation only (`unique:` + the unique index). Accept that, under two concurrent requests with the same email, one may return `500` (unique violation 23505) instead of `422`. Documented risk. | In v1 (low traffic) the exact collision is unlikely; catching the `QueryException` in the Action adds complexity not justified now. Can be hardened if traffic demands it. |
+| `personal_access_tokens` migration | Delete the one published by `install:api` without running it → zero migrations | SPA-only mode never issues tokens; Sanctum 4 does not auto-load package migrations. Avoids the `CLAUDE.md` DB-cloning workflow. |
+| CORS | `config/cors.php` published: `supports_credentials => true`, explicit `allowed_origins` (never `*`), `paths` with `api/*` and `sanctum/csrf-cookie` | Without credentials the browser drops the `Set-Cookie` from the registration response. The CORS spec forbids `*` with credentials. |
+| Scramble `security_strategy` | No change (`null`) | `register` is public; with the strategy off it is already documented as unsecured. It will be enabled (for cookie/apiKey, **not** bearer) when the first protected route exists. |
+| Tests: stateful session | `SANCTUM_STATEFUL_DOMAINS=localhost` + `APP_URL=http://localhost` in `phpunit.xml`; `Origin` header in every test | Without a stateful domain the `web` group is not injected and `session()->regenerate()` in the Action blows up. Exercises the real SPA path. CSRF auto-bypasses in tests. |
+| Tests: `RefreshDatabase` | Uncomment the global line in `tests/Pest.php` (scope `Feature`) | This is the first DB-touching test; every feature test after it needs it. |
+| Commit attribution | Follow `CLAUDE.md`: **no** `Co-Authored-By: Claude` / `Claude-Session:` trailers | `CLAUDE.md` is the repo contract and forbids it explicitly. No trailer check in `.github/`, but the contract governs. (Outside functional scope; noted for the commit phase.) |
 
 ---
 
 ## 10. Work Plan
 
-Las clases del pipeline se crean antes de cablear `routes/api.php` (que las
-referencia). Los Test Cases se implementan y se ejecutan al final (tarea 15); las
-DoD de las tareas 8–13 se limitan a que el artefacto exista y pase Pint + PHPStan.
+The pipeline classes are created before wiring `routes/api.php` (which references
+them). The Test Cases are implemented and run last (task 15); the DoD for tasks
+8–12 is limited to the artifact existing and passing Pint + PHPStan.
 
 | # | Task | Definition of Done |
 |---|---|---|
-| 1 | `composer require laravel/sanctum ^4` | `composer.lock` fija Sanctum 4.x; `composer install` en el contenedor sin errores. |
-| 2 | `php artisan install:api --stateful --no-interaction` y verificar el scaffolding; si falta algo, editar `bootstrap/app.php` a mano | `bootstrap/app.php` tiene `api:` en `withRouting()` y `$middleware->statefulApi()` en `withMiddleware()`; existe `routes/api.php`; existe la migración `*_create_personal_access_tokens_table.php`. No se ejecutaron migraciones. |
-| 3 | Borrar `database/migrations/*_create_personal_access_tokens_table.php` | El archivo no existe; `php artisan migrate --pretend` no lista esa tabla; el feature no añade migraciones. |
-| 4 | Ajustar `bootstrap/app.php`: `apiPrefix: 'api/v1'` en `withRouting()` | `php artisan route:list` muestra las rutas del grupo `api` bajo el prefijo `api/v1`. |
-| 5 | Publicar y editar `config/cors.php` (`supports_credentials => true`, `allowed_origins` de `FRONTEND_URL`, `paths` con `api/*` y `sanctum/csrf-cookie`, `allowed_methods`/`allowed_headers` `['*']`) | El archivo existe con esos valores; PHPStan level 6 limpio en `config/`. |
-| 6 | Publicar `config/sanctum.php` y dejar `stateful` (de env), `guard => ['web']`, `expiration => null` | El archivo existe; `config('sanctum.guard')` === `['web']`. |
-| 7 | Añadir `FRONTEND_URL`, `SANCTUM_STATEFUL_DOMAINS`, `SESSION_DOMAIN` a `.env.example` (y `.env` local) | `.env.example` contiene las tres claves con los valores de §6; `config('sanctum.stateful')` resuelve la lista esperada. |
-| 8 | Crear `app/Http/Requests/Auth/RegisterRequest.php` (`authorize(): true`; `rules()` para `name` `['required','string','max:255']`, `email` `['required','string','email','max:255','unique:users,email']`, `password` `['required','confirmed', Password::min(8)]`; `prepareForValidation()` baja el email a minúsculas + `trim`) | El archivo existe; Pint + PHPStan level 6 limpios. |
-| 9 | Crear `app/Data/Auth/RegisterData.php` (readonly `string $name/$email/$password`, sin `password_confirmation`) vía `make:data`, mover a `app/Data/Auth/`, corregir namespace | `RegisterData::from(['name'=>…,'email'=>…,'password'=>…])` construye el DTO; Pint + PHPStan limpios. |
-| 10 | Crear `app/Http/Resources/Auth/UserResource.php` (`toArray()` → `name`, `email`, `created_at` como ISO-8601; sin `id`, sin relaciones) | El archivo existe; Pint + PHPStan limpios. |
-| 11 | Crear `app/Actions/Auth/UserRegisterAction.php` (`final`, `handle(RegisterData $data): User` → `User::create([...])` → `Auth::login($user)` → `request()->session()->regenerate()` → `return $user`; sin `DB::transaction`, sin evento `Registered`) | El archivo existe; Pint + PHPStan limpios. |
-| 12 | Crear `app/Http/Controllers/Auth/RegisterController.php` (`final`, `__invoke(RegisterRequest $request, UserRegisterAction $action): JsonResponse` → `RegisterData::from($request->validated())` → `$action->handle(...)` → `UserResource::make($user)->response()->setStatusCode(201)`) vía `make:controller --invokable`, mover y corregir namespace | El archivo existe; Pint + PHPStan limpios. |
-| 13 | Escribir `routes/api.php`: `Route::post('register', RegisterController::class)->middleware('throttle:6,1')->name('auth.register')` con `use App\Http\Controllers\Auth\RegisterController;` | `php artisan route:list` muestra `POST api/v1/register` → `RegisterController` con middleware `throttle:6,1`; PHPStan limpio en `routes/`. |
-| 14 | Descomentar `->use(RefreshDatabase::class)` en `tests/Pest.php`; añadir `SANCTUM_STATEFUL_DOMAINS=localhost` y `APP_URL=http://localhost` a `phpunit.xml` | `docker compose exec app vendor/bin/pest` arranca sin `RuntimeException` de BD ni `Session store not set on request`; `ExampleTest` sigue verde. |
-| 15 | Escribir `tests/Feature/Auth/RegisterTest.php` con TC-1..TC-13 (`beforeEach` fija `withHeader('Origin', config('app.url'))`) | `docker compose exec app vendor/bin/pest tests/Feature/Auth/RegisterTest.php` todo verde. |
-| 16 | (Opcional, fuera de los AC) Añadir el arch test TC-14 (`tests/Arch/PipelineTest.php` o fichero arch compartido) | El arch test pasa. |
-| 17 | `docker compose exec app composer check` (Pint `--test` + PHPStan level 6 + Pest completo) | Los tres pasos verdes. |
-| 18 | Verificación manual con `curl` contra `http://localhost:8000` (`GET /sanctum/csrf-cookie` → `POST /api/v1/register` `201` con `Set-Cookie` → email repetido `422` en `email` → password sin confirmar `422` en `password`); revisar `GET /docs/api` | Los `curl` devuelven los códigos esperados; el endpoint aparece en Scramble con el body inferido de `RegisterRequest` y la respuesta `201` de `UserResource`. |
+| 1 | `composer require laravel/sanctum ^4` | `composer.lock` pins Sanctum 4.x; `composer install` in the container without errors. |
+| 2 | `php artisan install:api --stateful --no-interaction`, then verify the scaffolding; hand-edit `bootstrap/app.php` if anything is missing | `bootstrap/app.php` has `api:` in `withRouting()` and `$middleware->statefulApi()` in `withMiddleware()`; `routes/api.php` exists; the `*_create_personal_access_tokens_table.php` migration exists. No migrations were run. |
+| 3 | Delete `database/migrations/*_create_personal_access_tokens_table.php` | The file does not exist; `php artisan migrate --pretend` does not list that table; the feature adds no migrations. |
+| 4 | Adjust `bootstrap/app.php`: `apiPrefix: 'api/v1'` in `withRouting()` | `php artisan route:list` shows the `api` group routes under the `api/v1` prefix. |
+| 5 | Publish and edit `config/cors.php` (`supports_credentials => true`, `allowed_origins` from `FRONTEND_URL`, `paths` with `api/*` and `sanctum/csrf-cookie`, `allowed_methods`/`allowed_headers` `['*']`) | The file exists with those values; PHPStan level 6 clean in `config/`. |
+| 6 | Publish `config/sanctum.php`, keep `stateful` (from env), `guard => ['web']`, `expiration => null` | The file exists; `config('sanctum.guard')` === `['web']`. |
+| 7 | Add `FRONTEND_URL`, `SANCTUM_STATEFUL_DOMAINS`, `SESSION_DOMAIN` to `.env.example` (and local `.env`) | `.env.example` contains the three keys with the §6 values; `config('sanctum.stateful')` resolves the expected list. |
+| 8 | Create `app/Http/Requests/Auth/RegisterRequest.php` (`authorize(): true`; `rules()` for `name` `['required','string','max:255']`, `email` `['required','string','email','max:255','unique:users,email']`, `password` `['required','confirmed', Password::min(8)]`; `prepareForValidation()` lowercases + `trim`s the email) | The file exists; Pint + PHPStan level 6 clean. |
+| 9 | Create `app/Data/Auth/RegisterData.php` (readonly `string $name/$email/$password`, no `password_confirmation`) via `make:data`, move to `app/Data/Auth/`, fix the namespace | `RegisterData::from(['name'=>…,'email'=>…,'password'=>…])` builds the DTO; Pint + PHPStan clean. |
+| 10 | Create `app/Http/Resources/Auth/UserResource.php` (`toArray()` → `name`, `email`, `created_at` as ISO-8601; no `id`, no relations) | The file exists; Pint + PHPStan clean. |
+| 11 | Create `app/Actions/Auth/UserRegisterAction.php` (`final`, `handle(RegisterData $data): User` → `User::create([...])` → `Auth::login($user)` → `request()->session()->regenerate()` → `return $user`; no `DB::transaction`, no `Registered` event) | The file exists; Pint + PHPStan clean. |
+| 12 | Create `app/Http/Controllers/Auth/RegisterController.php` (`final`, `__invoke(RegisterRequest $request, UserRegisterAction $action): JsonResponse` → `RegisterData::from($request->validated())` → `$action->handle(...)` → `UserResource::make($user)->response()->setStatusCode(201)`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
+| 13 | Write `routes/api.php`: `Route::post('register', RegisterController::class)->middleware('throttle:6,1')->name('auth.register')` with `use App\Http\Controllers\Auth\RegisterController;` | `php artisan route:list` shows `POST api/v1/register` → `RegisterController` with `throttle:6,1` middleware; PHPStan clean in `routes/`. |
+| 14 | Uncomment `->use(RefreshDatabase::class)` in `tests/Pest.php`; add `SANCTUM_STATEFUL_DOMAINS=localhost` and `APP_URL=http://localhost` to `phpunit.xml` | `docker compose exec app vendor/bin/pest` starts without the DB `RuntimeException` or `Session store not set on request`; `ExampleTest` still green. |
+| 15 | Write `tests/Feature/Auth/RegisterTest.php` with TC-1..TC-13 (`beforeEach` sets `withHeader('Origin', config('app.url'))`) | `docker compose exec app vendor/bin/pest tests/Feature/Auth/RegisterTest.php` all green. |
+| 16 | (Optional, outside the AC) Add the arch test TC-14 (`tests/Arch/PipelineTest.php` or a shared arch file) | The arch test passes. |
+| 17 | `docker compose exec app composer check` (Pint `--test` + PHPStan level 6 + full Pest) | All three steps green. |
+| 18 | Manual check with `curl` against `http://localhost:8000` (`GET /sanctum/csrf-cookie` → `POST /api/v1/register` `201` with `Set-Cookie` → repeated email `422` on `email` → unconfirmed password `422` on `password`); review `GET /docs/api` | The `curl` calls return the expected codes; the endpoint appears in Scramble with the body inferred from `RegisterRequest` and the `201` response from `UserResource`. |
