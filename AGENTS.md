@@ -155,7 +155,15 @@ Tests mirror the tree: `tests/Feature/{Domain}/` (one file per endpoint),
 - `config()`, never `env()`, outside `config/`.
 - Writes take `validated()` / a `Data` object — never `$request->all()`.
 - Backed **enums** for every status / goal / action field. No bare strings.
-- Models keep `$fillable` — mass-assignment protection stays on.
+- Mass-assignment protection stays on — declare it (`#[Fillable(...)]` attribute
+  or `$fillable`); never `Model::unguard()`.
+- **Every model carries a complete PHPDoc block** above the class: `@property` /
+  `@property-read` for every column, cast, accessor and relation (plus `*_count`
+  and pivot accessors), and `@method` for scopes and custom static builders — it
+  is the map for navigating the model. Refresh it with
+  `php artisan ide-helper:models --write` (`barryvdh/laravel-ide-helper`), then
+  check by hand that custom accessors, appended attributes and scopes the tool
+  can't see are in the block too. Keep it in sync with the migration.
 - **PHP style:** curly braces always; constructor property promotion; explicit
   return types and parameter type hints everywhere; `TitleCase` enum cases;
   array-shape types in PHPDoc.
@@ -222,6 +230,8 @@ docker compose exec app composer check           # pint --test + phpstan + pest
 - `pint --dirty` formats only the files changed since the last commit.
 - Generate with `php artisan make:* --no-interaction`; if the generator can't
   take a path, move the file into its domain subfolder and fix the namespace.
+- After a migration: `php artisan ide-helper:models --write`, then Pint the
+  touched models and commit the refreshed PHPDoc blocks.
 
 ## Git
 

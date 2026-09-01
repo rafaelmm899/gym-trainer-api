@@ -69,3 +69,20 @@ jobs:
       - run: php artisan key:generate
 
       - run: vendor/bin/pest --colors=always
+
+      # Model PHPDoc blocks must be refreshed after any schema change. Runs
+      # against SQLite to avoid a Postgres service; revisit if a Postgres-only
+      # column type ever produces a false diff.
+      - name: Model PHPDoc is up to date
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: database/database.sqlite
+        run: |
+          touch database/database.sqlite
+          php artisan migrate --force
+          php artisan ide-helper:models --write --no-interaction
+          vendor/bin/pint app/Models
+          git diff --exit-status -- app/Models || {
+            echo "::error::Model PHPDoc is stale — run 'composer ide-helper && vendor/bin/pint app/Models' and commit.";
+            exit 1;
+          }
