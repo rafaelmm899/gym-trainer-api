@@ -14,6 +14,7 @@
         "spatie/laravel-data": "^4.23"
     },
     "require-dev": {
+        "barryvdh/laravel-ide-helper": "^3.7",
         "fakerphp/faker": "^1.23",
         "larastan/larastan": "^3.10",
         "laravel/boost": "^2.7",
@@ -58,6 +59,7 @@
         "pest": "pest",
         "pint": "pint",
         "stan": "phpstan analyse --memory-limit=512M",
+        "ide-helper": "@php artisan ide-helper:models --write --no-interaction",
         "check": [
             "@pint --test",
             "@stan",
