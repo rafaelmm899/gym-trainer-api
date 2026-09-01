@@ -82,7 +82,8 @@ jobs:
           php artisan migrate --force
           php artisan ide-helper:models --write --no-interaction
           vendor/bin/pint app/Models
-          git diff --exit-status -- app/Models || {
-            echo "::error::Model PHPDoc is stale — run 'composer ide-helper && vendor/bin/pint app/Models' and commit.";
-            exit 1;
-          }
+          if ! git diff --quiet -- app/Models; then
+            git --no-pager diff -- app/Models
+            echo "::error::Model PHPDoc is stale — run 'composer ide-helper && vendor/bin/pint app/Models' and commit."
+            exit 1
+          fi
