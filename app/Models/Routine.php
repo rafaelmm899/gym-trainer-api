@@ -8,9 +8,12 @@ use App\Models\Concerns\HasPublicUuid;
 use Carbon\CarbonImmutable;
 use Database\Factories\RoutineFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * @property int $id
@@ -25,6 +28,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read User $user
+ * @property-read Collection<int, Cycle> $cycles
+ * @property-read int|null $cycles_count
+ * @property-read Cycle|null $cycle
  *
  * @method static \Database\Factories\RoutineFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Routine newModelQuery()
@@ -82,5 +88,25 @@ class Routine extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * @return HasMany<Cycle, $this>
+     */
+    public function cycles(): HasMany
+    {
+        return $this->hasMany(Cycle::class);
+    }
+
+    /**
+     * The routine's current cycle — the one with the highest `sequence_number`.
+     * In v1 a routine has exactly one cycle (the first), created synchronously
+     * with the routine.
+     *
+     * @return HasOne<Cycle, $this>
+     */
+    public function cycle(): HasOne
+    {
+        return $this->hasOne(Cycle::class)->ofMany('sequence_number', 'max');
     }
 }

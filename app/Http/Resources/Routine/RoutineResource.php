@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Routine;
 
+use App\Http\Resources\Cycle\CycleResource;
 use App\Models\Routine;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -26,6 +27,7 @@ class RoutineResource extends JsonResource
             'archived_at' => $this->archived_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
+            'cycle' => CycleResource::make($this->whenLoaded('cycle')),
         ];
     }
 }

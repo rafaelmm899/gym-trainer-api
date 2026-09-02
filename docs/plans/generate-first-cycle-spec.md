@@ -212,7 +212,7 @@ verbatim — **no** extra columns.
 |---|---|---|
 | `exercises` | Create | `id` bigint PK · `uuid` uuid **`unique`** (filled by `HasPublicUuid`) · `name` string · `slug` string **`unique`** · `primary_muscle_group` string **nullable** (a `MuscleGroup` value) · `created_by_ai` boolean **default `true`** · `created_at` / `updated_at`. No `user_id`; never targeted by a cascade. |
 | `cycles` | Create | `id` bigint PK · `uuid` uuid **`unique`** · `routine_id` bigint FK → `routines.id`, `constrained()->cascadeOnDelete()` · `sequence_number` `unsignedInteger` · `status` string (a `CycleStatus` value) · `split_rationale` text **nullable** · `conversation_id` string(36) **nullable** (not populated in v1) · `generated_at` / `activated_at` / `completed_at` `timestamp` **nullable** · `created_at` / `updated_at`. **Unique** `(routine_id, sequence_number)`. |
-| `cycle_days` | Create | `id` bigint PK · `uuid` uuid **`unique`** · `cycle_id` bigint FK → `cycles.id`, `constrained()->cascadeOnDelete()` · `order` `unsignedSmallInteger` · `label` string · `focus_muscle_groups` **`json`** (array of `MuscleGroup` values) · `created_at` / `updated_at`. **Unique** `(cycle_id, order)`. |
+| `cycle_days` | Create | `id` bigint PK · `uuid` uuid **`unique`** · `cycle_id` bigint FK → `cycles.id`, `constrained()->cascadeOnDelete()` · `order` `unsignedSmallInteger` · `label` string · `focus_muscle_groups` **`json`** (array of `MuscleGroup` values) · `rationale` `text` (the AI's per-day explanation — AC #3) · `created_at` / `updated_at`. **Unique** `(cycle_id, order)`. |
 | `day_exercises` | Create | `id` bigint PK · `uuid` uuid **`unique`** · `cycle_day_id` bigint FK → `cycle_days.id`, `constrained()->cascadeOnDelete()` · `exercise_id` bigint FK → `exercises.id`, `constrained()` (**no** cascade — `restrict`) · `order` `unsignedSmallInteger` · `sets` `unsignedSmallInteger` · `rep_min` `unsignedSmallInteger` · `rep_max` `unsignedSmallInteger` · `target_weight_kg` `decimal(6,2)` **nullable** · `target_rpe` `decimal(3,1)` **nullable** · `rest_seconds` `unsignedSmallInteger` · `rationale` text · `created_at` / `updated_at`. **Unique** `(cycle_day_id, order)`. |
 
 Notes:
@@ -220,6 +220,9 @@ Notes:
   PostgreSQL 17 and SQLite `:memory:`; the Eloquent `array` cast behaves
   identically for the whole-array replace pattern. `data-model.md` says `jsonb` —
   documented deviation.
+- `cycle_days.rationale` is **added to** `data-model.md` §`cycle_days` — the data
+  model as written stored a `split_rationale` on the cycle and a per-exercise
+  `rationale` but no per-*day* explanation, which AC #3 requires.
 - `exercise_id` is `constrained()` with **no** cascade → DB default `RESTRICT`: a
   catalogued exercise can never be deleted from under a prescription
   (`data-model.md` §Convenciones).
@@ -233,9 +236,9 @@ Notes:
   (`day_exercises`, `cycle_days`, `cycles`, `exercises`).
 - Migration timestamps sort after `2026_09_02_130000_create_routines_table` and
   run `exercises` → `cycles` → `cycle_days` → `day_exercises`.
-- **Doc update** — `docs/plans/data-model.md` §Enums: drop the "*(a validar)*"
-  note on `MuscleGroup` and the "*(primera lista)*" caveat; both enums are now
-  real. §`cycles` is unchanged (no new columns).
+- **Doc update** — `docs/plans/data-model.md`: §Enums drops the "*(a validar)*" /
+  "*(primera lista)*" caveats on `MuscleGroup`; §`cycle_days` gains the
+  `rationale` row. §`cycles` is unchanged (no new columns).
 - **Database isolation (`CLAUDE.md`):** this branch adds migrations, so:
   `docker compose exec pgsql createdb -U gym -T gym_trainer gym_trainer_generate_first_cycle`,
   set `DB_DATABASE=gym_trainer_generate_first_cycle` in the worktree `.env`; drop
@@ -360,9 +363,16 @@ function cyclePlanPayload(array $overrides = []): array
 
 function fakeCyclePlanner(array $overrides = []): void
 {
-    \App\Ai\Agents\Cycle\CyclePlannerAgent::fake([cyclePlanPayload($overrides)]);
+    // A closure, not a one-element array: a test that plans more than once
+    // (e.g. the name/hint boundary case) must not fall through to
+    // schema-random fake data on the second call.
+    \App\Ai\Agents\Cycle\CyclePlannerAgent::fake(fn (): array => cyclePlanPayload($overrides));
 }
 ```
+
+`assertPrompted` receives the `Laravel\Ai\Prompts\AgentPrompt` object, so the
+prompt text is `$prompt->prompt`:
+`CyclePlannerAgent::assertPrompted(fn ($prompt) => str_contains($prompt->prompt, '…'))`.
 
 ### POST `/api/v1/routines` — `tests/Feature/Routine/StoreRoutineTest.php` (reworked)
 

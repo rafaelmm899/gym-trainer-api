@@ -23,6 +23,14 @@ arch('form requests extend FormRequest')
     ->expect('App\Http\Requests')
     ->toExtend('Illuminate\Foundation\Http\FormRequest');
 
+arch('services are final')
+    ->expect('App\Services')
+    ->toBeFinal();
+
+arch('ai agents are final')
+    ->expect('App\Ai\Agents')
+    ->toBeFinal();
+
 arch('no debug helpers leak into app code')
     ->expect(['dd', 'dump', 'ray', 'var_dump', 'die'])
     ->not->toBeUsed();

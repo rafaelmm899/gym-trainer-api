@@ -55,7 +55,7 @@ Así la API no filtra el orden de creación ni el volumen de filas.
 
 | # | Decisión | Elegido |
 |---|---|---|
-| 1 | Grupos musculares | Enum fijo `MuscleGroup` (primera lista, abajo) |
+| 1 | Grupos musculares | Enum fijo `MuscleGroup` (lista en [Enums](#enums)) |
 | 2 | `focus_muscle_groups` | `jsonb` (array de enum) en `cycle_days`, sin pivote |
 | 3 | Reps (prescripción y recomendación) | Rango `rep_min` / `rep_max` |
 | 4 | `confidence` | Enum `low` / `medium` / `high` |
@@ -170,6 +170,7 @@ entrena a su ritmo.
 | `order` | `smallint` | Posición dentro del ciclo: 1..5. |
 | `label` | `string` | Nombre visible del día ("Pecho", "Piernas"). |
 | `focus_muscle_groups` | `jsonb` | Array de valores de `MuscleGroup` que son foco de ese día. Se usa para mostrar y como contexto de la IA; en v1 no se consulta por grupo. |
+| `rationale` | `text` | Explicación de la IA sobre por qué armó el día así (qué grupos, qué volumen). La devuelve el planificador junto con el `split_rationale` y el racional por ejercicio. |
 
 **Reglas**
 - Único `(cycle_id, order)`.
@@ -333,7 +334,7 @@ expone como endpoint en v1.
 |---|---|---|
 | `Goal` | `App\Enums\Shared\Goal` | `hypertrophy`, `strength`, `fat_loss`, `general_health`, `endurance` |
 | `ExperienceLevel` | `App\Enums\Profile\ExperienceLevel` | `beginner`, `intermediate`, `advanced` |
-| `MuscleGroup` | `App\Enums\Shared\MuscleGroup` | `chest`, `back`, `quads`, `hamstrings`, `glutes`, `shoulders`, `biceps`, `triceps`, `calves`, `core` *(primera lista, a validar)* |
+| `MuscleGroup` | `App\Enums\Shared\MuscleGroup` | `chest`, `back`, `quads`, `hamstrings`, `glutes`, `shoulders`, `biceps`, `triceps`, `calves`, `core` |
 | `RoutineStatus` | `App\Enums\Routine\RoutineStatus` | `active`, `archived` |
 | `CycleStatus` | `App\Enums\Cycle\CycleStatus` | `generating`, `draft`, `active`, `completed`, `failed` |
 | `SessionStatus` | `App\Enums\Session\SessionStatus` | `in_progress`, `completed` |
