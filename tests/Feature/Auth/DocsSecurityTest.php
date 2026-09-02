@@ -20,7 +20,9 @@ it('documents auth with a cookie scheme and keeps the public routes open', funct
         ->and($spec['paths']['/api/v1/user']['get'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/profile']['get'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/profile']['put'])->not->toHaveKey('security')
-        ->and($spec['paths']['/api/v1/routines']['post'])->not->toHaveKey('security');
+        ->and($spec['paths']['/api/v1/routines']['post'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/routines']['get'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/routines/{routine}']['get'])->not->toHaveKey('security');
 
     // The public operations opt out explicitly.
     expect($spec['paths']['/api/v1/login']['post']['security'])->toBe([])

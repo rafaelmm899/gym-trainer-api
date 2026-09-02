@@ -6,6 +6,8 @@ use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
+use App\Http\Controllers\Routine\ListRoutinesController;
+use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
 use Illuminate\Support\Facades\Route;
 
@@ -30,4 +32,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     // Routines: the Form Request delegates authorization to RoutinePolicy.
     Route::post('routines', StoreRoutineController::class)->name('routines.store');
+
+    // Reads: the list is scoped to the caller (no Policy); the detail route
+    // binds {routine} by uuid and gates on RoutinePolicy::view.
+    Route::get('routines', ListRoutinesController::class)->name('routines.list');
+    Route::get('routines/{routine}', ShowRoutineController::class)
+        ->whereUuid('routine')
+        ->can('view', 'routine')
+        ->name('routines.show');
 });
