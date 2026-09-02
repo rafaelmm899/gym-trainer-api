@@ -3,7 +3,6 @@
 use Dedoc\Scramble\Http\Middleware\RestrictedDocsAccess;
 use Dedoc\Scramble\SecurityDocumentation\MiddlewareAuthSecurityStrategy;
 use Dedoc\Scramble\Support\Generator\SecurityScheme;
-use Illuminate\Support\Str;
 
 return [
     /*
@@ -180,18 +179,13 @@ return [
      *     ],
      * ],
      */
-    // 'security_strategy' => \Dedoc\Scramble\SecurityDocumentation\MiddlewareAuthSecurityStrategy::class,
-    //
-    // This API authenticates with the Sanctum SPA session cookie (not a bearer
-    // token), so the documented scheme is apiKey-in-cookie. Routes without
-    // `auth`/`auth:*` middleware (e.g. register) are marked public (`security: []`).
     'security_strategy' => [
         MiddlewareAuthSecurityStrategy::class,
         [
-            'middleware' => ['auth', 'auth:*'],
+            'middleware' => ['auth:sanctum'],
             'scheme' => SecurityScheme::apiKey(
                 'cookie',
-                env('SESSION_COOKIE', Str::slug((string) env('APP_NAME', 'laravel')).'-session'),
+                env('SESSION_COOKIE', 'gym-trainer-api-session'),
             ),
         ],
     ],

@@ -36,8 +36,11 @@ Routines, Cycles, Sessions and Recommendations will all build on.
   and `App\Enums\Shared\Goal`.
 - The first `auth:sanctum` route group in `routes/api.php`.
 - The first Policy (`AthleteProfilePolicy`), resolved by Laravel auto-discovery.
-- Enabling `security_strategy` in `config/scramble.php` (apiKey / cookie scheme) —
-  deferred by the register spec "until the first protected route exists".
+- Verifying the profile routes are covered by Scramble's `security_strategy`
+  (apiKey / cookie scheme). The strategy itself was already enabled on `main` by
+  the login & logout PR (#5) with `'middleware' => ['auth:sanctum']`, which the
+  profile routes match — so this ticket adds no `config/scramble.php` change,
+  only two assertions to the shared `tests/Feature/Auth/DocsSecurityTest.php`.
 - Pest feature + unit coverage of every acceptance criterion.
 
 **Out of scope:**
@@ -212,16 +215,13 @@ need (`DB_CONNECTION=sqlite`, `DB_DATABASE=:memory:`, `SANCTUM_STATEFUL_DOMAINS=
 
 | File | Change |
 |---|---|
-| `routes/api.php` | Add `use` imports for the two Profile controllers and a `Route::middleware('auth:sanctum')->group(...)` with `GET profile` → `ShowAthleteProfileController` (`profile.show`) and `PUT profile` → `UpdateAthleteProfileController` (`profile.update`). The public `register` route and its comment are untouched. |
-| `config/scramble.php` | Set `security_strategy` from `null` to `MiddlewareAuthSecurityStrategy` with a `SecurityScheme::apiKey('cookie', config('session.cookie'))` scheme (cookie, **not** bearer — this API is Sanctum SPA). Verify the helper signature against the installed `dedoc/scramble ^0.13.42` first; if it differs, fall back to `Scramble::extendOpenApi()` in `AppServiceProvider::boot()`. |
+| `routes/api.php` | Add `use` imports for the two Profile controllers and, inside the `auth:sanctum` group added by the login & logout PR (alongside `logout` / `user`), `GET profile` → `ShowAthleteProfileController` (`profile.show`) and `PUT profile` → `UpdateAthleteProfileController` (`profile.update`). The `register` / `login` routes are untouched. |
+| `config/scramble.php` | **No change** (see the "In scope" note — the strategy is already on `main`). |
+| `tests/Feature/Auth/DocsSecurityTest.php` | Extend the login & logout PR's test with two assertions that `/v1/profile` `get` and `put` inherit the global `security` (no per-operation override). |
 
 No change to `config/auth.php`, `config/sanctum.php`, `config/cors.php`,
-`bootstrap/app.php`, `bootstrap/providers.php`, `phpunit.xml`, `composer.json`.
-
-- Scramble's `GET /docs/api.json` route is served in non-production environments;
-  TC-27 depends on it being reachable under `APP_ENV=testing`. If it is gated off
-  there, TC-27 is skipped with a documented reason and the OpenAPI security check
-  falls to the manual `curl` task (§10, Task 23).
+`config/scramble.php`, `bootstrap/app.php`, `bootstrap/providers.php`,
+`phpunit.xml`, `composer.json`.
 
 ---
 
@@ -235,8 +235,8 @@ No change to `config/auth.php`, `config/sanctum.php`, `config/cors.php`,
 | Authorization | None. No `app/Policies/`, no `AuthServiceProvider`. `RegisterRequest::authorize()` returns `true` (documented public exception). | First Policy (`AthleteProfilePolicy`), auto-discovered. Profile Form Requests delegate `authorize()` to it. |
 | Enums | `app/Enums/` does not exist. | `App\Enums\Profile\ExperienceLevel` and `App\Enums\Shared\Goal` — first backed enums, matching `docs/plans/data-model.md` §Enums. |
 | `User` model | No relations. | `athleteProfile(): HasOne` relation + `@property-read` PHPDoc line. |
-| OpenAPI auth docs | `config/scramble.php` `security_strategy => null`; every route documented as unsecured. | `MiddlewareAuthSecurityStrategy` (apiKey/cookie): `/api/v1/profile` documented as secured, `/api/v1/register` explicitly `security: []`. |
-| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test + the DTO test), `tests/Unit/Profile/` (Policy), `tests/Feature/Docs/ApiDocsSecurityTest.php`, one added `tests/Feature/ArchTest.php` rule. |
+| OpenAPI auth docs | `MiddlewareAuthSecurityStrategy` already on `main` (login & logout PR); it covers any `auth:sanctum` route. | The `/api/v1/profile` operations inherit the global `security`; `DocsSecurityTest` now asserts that alongside `logout` / `user`. |
+| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test + the DTO test), `tests/Unit/Profile/` (Policy), two assertions added to `tests/Feature/Auth/DocsSecurityTest.php`, one added `tests/Feature/ArchTest.php` rule. |
 
 ---
 
@@ -401,12 +401,12 @@ overhead for TC-24.
 - **When:** the Pest architecture assertions run
 - **Expect:** `App\Http\Controllers\Profile` is invokable (new `arch(...)` line); the existing rules (`App\Actions\*` final + `handle()`, `App\Http\Requests\*` extends `FormRequest`, no debug helpers) still pass
 
-### OpenAPI — `tests/Feature/Docs/ApiDocsSecurityTest.php`
+### OpenAPI — `tests/Feature/Auth/DocsSecurityTest.php` (extends the login & logout PR's test)
 
 **TC-27:** The generated OpenAPI spec marks the profile routes secured
-- **Given:** the app under `APP_ENV=testing` with `security_strategy` set to `MiddlewareAuthSecurityStrategy` (§6)
-- **When:** `GET /docs/api.json`
-- **Expect:** `200`; `paths./api/v1/profile.get` and `paths./api/v1/profile.put` each carry a non-empty `security` array; `paths./api/v1/register.post` carries `security: []`. If Scramble's doc route is not served under `APP_ENV=testing`, the test is skipped with an explicit reason and the same assertions are verified manually in §10 Task 23.
+- **Given:** the app with `security_strategy` = `MiddlewareAuthSecurityStrategy` (already on `main`)
+- **When:** the spec is generated in-process (`app(\Dedoc\Scramble\Generator::class)()`)
+- **Expect:** a global `security` requirement is present; `paths./v1/profile.get` and `paths./v1/profile.put` have **no** per-operation `security` key (they inherit the global one), the same way `logout` / `user` do; `paths./v1/register.post` and `paths./v1/login.post` carry `security: []`. Added as two `->and(...)` assertions to the existing TC-21 test.
 
 ---
 
@@ -434,7 +434,7 @@ overhead for TC-24.
 | `AuthServiceProvider` | Not created | Laravel 13 resolves `App\Policies\{Model}Policy` by convention with zero wiring. A provider would only be needed for a non-conventional name. |
 | Route grouping | One `Route::middleware('auth:sanctum')->group(...)` for both routes | Two routes share the middleware and the domain will grow (routines, cycles, sessions). Keeps `routes/api.php` in its existing plain-`Route::` style; `use` imports at the top for PHPStan. |
 | Rate limiting | None on the profile routes | Authenticated, low-abuse. `register`'s `throttle:6,1` exists because it is public and unauthenticated. |
-| Scramble `security_strategy` | Enable now: `MiddlewareAuthSecurityStrategy` with an **apiKey / cookie** scheme (`config('session.cookie')`), not bearer | The register spec deferred this "until the first protected route exists" — this is that route. The API is Sanctum SPA (session cookie + CSRF); the default bearer scheme would misrepresent it. `/api/v1/register` becomes `security: []`. |
+| Scramble `security_strategy` | **No change here** — the login & logout PR (#5) landed it first (`MiddlewareAuthSecurityStrategy`, `'middleware' => ['auth:sanctum']`, apiKey/cookie). The profile routes match that middleware, so they are covered automatically; this ticket only extends `DocsSecurityTest` to assert it. | Avoids a merge conflict and a duplicate config change. The pattern `['auth:sanctum']` is an exact match for the profile group's middleware. |
 | Model strictness | The relation is always fetched via an explicit query (`->first()` / `->updateOrCreate()`); the Resource reads only own columns | `Model::shouldBeStrict(!isProduction())` makes a lazy relation load throw. Nothing in the pipeline touches `$user->athleteProfile` as a lazy property or `$profile->user`. |
 | Tests: DB | SQLite `:memory:` + `RefreshDatabase` (already wired); no `phpunit.xml` change | This is not the first DB-touching suite (register established it). The runtime Postgres clone is only for the dev migration. |
 | Git artifacts | English only; **no** `Co-Authored-By: Claude` / `Claude-Session:` commit trailers; PR description with **no** "Generated with Claude Code" footer | Repo `CLAUDE.md` / `AGENTS.md` rule, confirmed to take precedence over the session's attribution instruction. |
@@ -467,7 +467,7 @@ in the same task.
 | 14 | Create `app/Http/Controllers/Profile/UpdateAthleteProfileController.php` via `make:controller --invokable`, move + fix namespace: build the DTO, call the Action, return `AthleteProfileStatusResource::make($profile)->response()->setStatusCode($profile->wasRecentlyCreated ? 201 : 200)` | `final`, `__invoke` only; Pint + PHPStan clean. |
 | 15 | Create `app/Http/Controllers/Profile/ShowAthleteProfileController.php` (`final`, `__invoke` → `AthleteProfileStatusResource::make($request->user()->athleteProfile()->first())`) | `final`, `__invoke` only; Pint + PHPStan clean. |
 | 16 | Edit `routes/api.php`: add `use` imports for both controllers and a `Route::middleware('auth:sanctum')->group(...)` with `GET profile` → `profile.show` and `PUT profile` → `profile.update` | `docker compose exec app php artisan route:list` shows `GET|PUT api/v1/profile` with `auth:sanctum` middleware; PHPStan clean in `routes/`. |
-| 17 | Edit `config/scramble.php`: set `security_strategy` to `MiddlewareAuthSecurityStrategy` with a `SecurityScheme::apiKey('cookie', config('session.cookie'))` scheme; verify the helper signature against `composer show dedoc/scramble` first. Write `tests/Feature/Docs/ApiDocsSecurityTest.php` (TC-27) | `vendor/bin/pest tests/Feature/Docs/ApiDocsSecurityTest.php` green — the `/api/v1/profile` operations carry a non-empty `security`, `/api/v1/register` carries `security: []`. If Scramble's `/docs/api.json` is not served under `APP_ENV=testing`, TC-27 is skipped with a documented reason and the check falls to Task 23; the doc build logs no errors either way. |
+| 17 | No `config/scramble.php` change (the strategy is already on `main`). Add two `->and($spec['paths']['/v1/profile'][...])->not->toHaveKey('security')` assertions to `tests/Feature/Auth/DocsSecurityTest.php` (TC-27) | `vendor/bin/pest tests/Feature/Auth/DocsSecurityTest.php` green — profile `get` / `put` inherit the global `security`, `register` / `login` carry `security: []`. |
 | 18 | Write `tests/Feature/Profile/UpdateAthleteProfileTest.php` covering TC-1 … TC-17 (`beforeEach` sets the `Origin` header) | `docker compose exec app vendor/bin/pest tests/Feature/Profile/UpdateAthleteProfileTest.php` all green; every TC-1…TC-17 has a corresponding test. |
 | 19 | Write `tests/Feature/Profile/ShowAthleteProfileTest.php` covering TC-18 … TC-22 | `docker compose exec app vendor/bin/pest tests/Feature/Profile/ShowAthleteProfileTest.php` all green. |
 | 20 | Add the `arch('profile controllers are invokable')->expect('App\Http\Controllers\Profile')->toBeInvokable()` line to `tests/Feature/ArchTest.php` (TC-26) | `docker compose exec app vendor/bin/pest tests/Feature/ArchTest.php` green. |
