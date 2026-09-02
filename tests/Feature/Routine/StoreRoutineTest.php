@@ -7,9 +7,6 @@ use App\Models\Routine;
 use App\Models\User;
 use Illuminate\Support\Facades\Bus;
 
-const UUID_REGEX = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/';
-const ISO_8601_REGEX = '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/';
-
 /**
  * @param  array<string, mixed>  $overrides
  * @return array<string, mixed>
@@ -42,7 +39,7 @@ it('creates the first routine active and queues cycle generation', function () {
         ->assertJsonPath('data.days_per_cycle', 5)
         ->assertJsonPath('data.archived_at', null);
 
-    expect($response->json('data.id'))->toMatch(UUID_REGEX);
+    expect($response->json('data.id'))->toMatch(uuidV4Pattern());
 
     $this->assertDatabaseCount('routines', 1);
     $this->assertDatabaseHas('routines', [
@@ -228,7 +225,7 @@ it('exposes the uuid as id, never the internal primary key', function () {
     $routine = Routine::query()->firstOrFail();
 
     expect($response->json('data.id'))->toBe($routine->uuid)
-        ->and($response->json('data.id'))->toMatch(UUID_REGEX)
+        ->and($response->json('data.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.id'))->not->toBe((string) $routine->id);
 
     $response
@@ -248,7 +245,7 @@ it('serialises enums as strings and dates as ISO-8601', function () {
 
     expect($response->json('data.status'))->toBe('active')
         ->and($response->json('data.goal'))->toBe('hypertrophy')
-        ->and($response->json('data.created_at'))->toMatch(ISO_8601_REGEX);
+        ->and($response->json('data.created_at'))->toMatch(iso8601Pattern());
 });
 
 // TC-18
