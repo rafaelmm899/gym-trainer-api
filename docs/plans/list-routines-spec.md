@@ -39,15 +39,17 @@ reuses everything the `POST` ticket built.
 - `GET /api/v1/routines/{routine}` — return one routine the caller owns, by its
   public `uuid`, `active` **or** `archived`. `403` when the `uuid` belongs to
   another user, `404` when it matches no row (or is not a UUID).
-- `App\Http\Controllers\Routine\IndexRoutineController` +
+- `App\Http\Controllers\Routine\ListRoutinesController` +
   `App\Http\Controllers\Routine\ShowRoutineController` — invokable, no Form
   Request, no Action (trivial reads; `CLAUDE.md` rules 5–6, mirroring
-  `ShowAthleteProfileController`).
+  `ShowAthleteProfileController`). Verb-first names (`CLAUDE.md` controller
+  rule): `List` for the collection (plural — it returns many), `Show` for the
+  item (matches the existing `ShowAthleteProfileController`).
 - `App\Policies\RoutinePolicy::view(User, Routine): bool` — the real ownership
   gate for the `{routine}` id, wired as `->can('view', 'routine')` route
   middleware on the detail route.
 - Two routes added to the existing `auth:sanctum` group in `routes/api.php`
-  (`routines.index`, `routines.show`); the detail route constrained with
+  (`routines.list`, `routines.show`); the detail route constrained with
   `->whereUuid('routine')`.
 - One assertion pair added to `tests/Feature/Auth/DocsSecurityTest.php` (both GET
   operations inherit the global `security`).
@@ -234,7 +236,7 @@ already carries everything the tests need (`DB_CONNECTION=sqlite`,
 
 | File | Change |
 |---|---|
-| `routes/api.php` | Add `use` imports for `IndexRoutineController` and `ShowRoutineController`. Inside the existing `auth:sanctum` group, next to `routines.store`: `Route::get('routines', IndexRoutineController::class)->name('routines.index')` and `Route::get('routines/{routine}', ShowRoutineController::class)->whereUuid('routine')->can('view', 'routine')->name('routines.show')`. |
+| `routes/api.php` | Add `use` imports for `ListRoutinesController` and `ShowRoutineController`. Inside the existing `auth:sanctum` group, next to `routines.store`: `Route::get('routines', ListRoutinesController::class)->name('routines.list')` and `Route::get('routines/{routine}', ShowRoutineController::class)->whereUuid('routine')->can('view', 'routine')->name('routines.show')`. |
 | `tests/Feature/Auth/DocsSecurityTest.php` | Add two assertions that `/api/v1/routines` `get` and `/api/v1/routines/{routine}` `get` have no per-operation `security` key (they inherit the document-root cookie scheme), in the existing `->and(...)` chain. |
 
 No change to `bootstrap/app.php`, `config/auth.php`, `config/sanctum.php`,
@@ -256,7 +258,7 @@ No change to `bootstrap/app.php`, `config/auth.php`, `config/sanctum.php`,
 | Authenticated routes | `auth:sanctum` group holds `logout`, `user`, `GET`/`PUT profile`, `POST routines`. | Adds `GET routines` and `GET routines/{routine}` to the same group. |
 | Route-model binding | Not used anywhere (no route has a `{param}` segment). | `GET /api/v1/routines/{routine}` is the first route-model-bound route; resolves by `uuid`, constrained with `->whereUuid`. |
 | `->can()` route middleware | Not used (profile routes have no Policy; `routines.store` authorizes in the Form Request). | First use of `->can()` as route middleware. |
-| Routine-read tests | None. | `tests/Feature/Routine/IndexRoutineTest.php`, `tests/Feature/Routine/ShowRoutineTest.php`, two `RoutinePolicyTest` cases, one `DocsSecurityTest` assertion pair. |
+| Routine-read tests | None. | `tests/Feature/Routine/ListRoutinesTest.php`, `tests/Feature/Routine/ShowRoutineTest.php`, two `RoutinePolicyTest` cases, one `DocsSecurityTest` assertion pair. |
 
 ---
 
@@ -273,7 +275,7 @@ dispatched). File-level regexes as in `StoreRoutineTest`:
 `archived` routine" = `Routine::factory()->for($user)->archived()->create()`
 (two `active` routines for one user violate the partial unique index).
 
-### `GET /api/v1/routines` — `tests/Feature/Routine/IndexRoutineTest.php`
+### `GET /api/v1/routines` — `tests/Feature/Routine/ListRoutinesTest.php`
 
 **TC-1:** Lists the caller's routines, `active` first then `archived` newest-first (AC #2)
 - **Given:** an authenticated user with one `active` routine and two `archived`
@@ -409,7 +411,8 @@ dispatched). File-level regexes as in `StoreRoutineTest`:
 | Distinguishing the active routine | The `status` field (`"active"` / `"archived"`) plus the guaranteed ordering (active at index `0`). No extra `is_active` boolean. | `status` already conveys it unambiguously; a derived flag would duplicate state (`CLAUDE.md` rules 5–6). |
 | Archived routine detail | The detail endpoint returns the caller's routine **regardless of status**. | A `{routine}` binding that rejected the owner's own `archived` routine contradicts `docs/product-context.md` §2 ("conserva todo su historial para consulta"). Deliberate, narrow extension of §6's "fuera de la v1" line, which predates this ticket. Confirmed with the product owner. |
 | Onboarding guard | None on either read. | A profile-less user simply owns no routines. Unlike `POST`, a read has no account-state precondition. |
-| Controller return types | `IndexRoutineController::__invoke(Request): AnonymousResourceCollection`; `ShowRoutineController::__invoke(Routine): RoutineResource`. | Explicit return types (`CLAUDE.md` PHP style) and they let `dedoc/scramble` infer the list as an array of `RoutineResource` and the detail as a single one, with `{routine}` a `uuid` path param — no `#[...]` attribute needed. |
+| Controller names | `ListRoutinesController` (collection, plural) and `ShowRoutineController` (item, singular) — route names `routines.list` / `routines.show`. | `CLAUDE.md` controller rule: "Verb-first name" (`Store…`, `Generate…`, `Close…`). `List` is the verb; `Index` is the Laravel router's action label, not a verb, so it is not used. `Show` mirrors the existing `ShowAthleteProfileController`; plural `Routines` for the collection matches "list routines" and the Notion title "Listar mis rutinas". |
+| Controller return types | `ListRoutinesController::__invoke(Request): AnonymousResourceCollection`; `ShowRoutineController::__invoke(Routine): RoutineResource`. | Explicit return types (`CLAUDE.md` PHP style) and they let `dedoc/scramble` infer the list as an array of `RoutineResource` and the detail as a single one, with `{routine}` a `uuid` path param — no `#[...]` attribute needed. |
 | Model strictness | Controllers select whole rows (`->get()` / the bound model); `RoutineResource` reads only own columns; nothing touches `$routine->user`. | `Model::shouldBeStrict(! isProduction())` makes a lazy relation load and a missing-attribute access throw outside production. TC-7 / TC-14 assert no lazy load. |
 | Tests | SQLite `:memory:` + `RefreshDatabase` (already wired); no `Bus::fake()`; no `phpunit.xml` change; no `gym_trainer` clone (no migration). | Read-only feature tests. `RoutineFactory` + its `archived()` state cover every fixture; `CarbonImmutable` `travel` spreads `created_at` for the ordering assertion. |
 | `ArchTest` | No change. | `arch('routine controllers are invokable')` already targets `App\Http\Controllers\Routine`; the two new controllers are covered automatically. |
@@ -427,10 +430,10 @@ in the same task. Task 8 is the functional gate.
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Add `view(User $user, Routine $routine): bool` to `app/Policies/RoutinePolicy.php` (`return $routine->user_id === $user->id;`) with a short PHPDoc. Extend `tests/Unit/Routine/RoutinePolicyTest.php` with TC-15 + TC-16 | `vendor/bin/pest tests/Unit/Routine/RoutinePolicyTest.php` green; `Gate::forUser($owner)->allows('view', $routine)` is `true`, denies a stranger; Pint + PHPStan clean. |
-| 2 | Create `app/Http/Controllers/Routine/IndexRoutineController.php` via `make:controller --invokable`, move into the domain folder + fix namespace: `final`, `__invoke(Request $request): AnonymousResourceCollection` → resolve `$user`, `$routines = $user->routines()->orderByRaw("CASE WHEN status = 'active' THEN 0 ELSE 1 END")->orderByDesc('created_at')->get()`, `return RoutineResource::collection($routines)` | `final`, `__invoke` only; Pint + PHPStan clean (`/** @var User $user */` on `$request->user()`). |
+| 2 | Create `app/Http/Controllers/Routine/ListRoutinesController.php` via `make:controller --invokable`, move into the domain folder + fix namespace: `final`, `__invoke(Request $request): AnonymousResourceCollection` → resolve `$user`, `$routines = $user->routines()->orderByRaw("CASE WHEN status = 'active' THEN 0 ELSE 1 END")->orderByDesc('created_at')->get()`, `return RoutineResource::collection($routines)` | `final`, `__invoke` only; Pint + PHPStan clean (`/** @var User $user */` on `$request->user()`). |
 | 3 | Create `app/Http/Controllers/Routine/ShowRoutineController.php` the same way: `final`, `__invoke(Routine $routine): RoutineResource` → `return RoutineResource::make($routine)` | `final`, `__invoke` only; Pint + PHPStan clean. |
-| 4 | Edit `routes/api.php`: add the two `use` imports; in the `auth:sanctum` group add `Route::get('routines', IndexRoutineController::class)->name('routines.index')` and `Route::get('routines/{routine}', ShowRoutineController::class)->whereUuid('routine')->can('view', 'routine')->name('routines.show')` | `php artisan route:list` shows both routes with `auth:sanctum`; the detail route lists the `can:view,routine` middleware; PHPStan clean in `routes/`. |
-| 5 | Write `tests/Feature/Routine/IndexRoutineTest.php` covering TC-1 … TC-7 (`beforeEach`: `Origin` header + `$this->user`) | `vendor/bin/pest tests/Feature/Routine/IndexRoutineTest.php` all green. |
+| 4 | Edit `routes/api.php`: add the two `use` imports; in the `auth:sanctum` group add `Route::get('routines', ListRoutinesController::class)->name('routines.list')` and `Route::get('routines/{routine}', ShowRoutineController::class)->whereUuid('routine')->can('view', 'routine')->name('routines.show')` | `php artisan route:list` shows both routes with `auth:sanctum`; the detail route lists the `can:view,routine` middleware; PHPStan clean in `routes/`. |
+| 5 | Write `tests/Feature/Routine/ListRoutinesTest.php` covering TC-1 … TC-7 (`beforeEach`: `Origin` header + `$this->user`) | `vendor/bin/pest tests/Feature/Routine/ListRoutinesTest.php` all green. |
 | 6 | Write `tests/Feature/Routine/ShowRoutineTest.php` covering TC-8 … TC-14 | `vendor/bin/pest tests/Feature/Routine/ShowRoutineTest.php` all green. |
 | 7 | Add the `/api/v1/routines` `get` and `/api/v1/routines/{routine}` `get` assertions to `tests/Feature/Auth/DocsSecurityTest.php` (TC-17) | `vendor/bin/pest tests/Feature/Auth/DocsSecurityTest.php` green. |
 | 8 | Run `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then `composer check` (Pint `--test` + PHPStan level 6 + full Pest) | Pint reports no diffs; PHPStan level 6 clean; the full suite green with no regression in Auth / Profile / Routine. |
