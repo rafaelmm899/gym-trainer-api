@@ -22,7 +22,7 @@ it('logs out an authenticated user', function () {
 it('rejects logout without an active session', function () {
     $this->postJson('/api/v1/logout')
         ->assertStatus(401)
-        ->assertExactJson(['message' => 'Unauthenticated.']);
+        ->assertExactJson(['data' => ['code' => 'AUTHENTICATION_EXCEPTION', 'message' => 'Unauthenticated.']]);
 });
 
 // TC-15

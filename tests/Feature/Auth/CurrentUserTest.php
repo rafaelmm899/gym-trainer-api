@@ -23,5 +23,5 @@ it('returns the authenticated user identity', function () {
 it('requires a session', function () {
     $this->getJson('/api/v1/user')
         ->assertStatus(401)
-        ->assertExactJson(['message' => 'Unauthenticated.']);
+        ->assertExactJson(['data' => ['code' => 'AUTHENTICATION_EXCEPTION', 'message' => 'Unauthenticated.']]);
 });

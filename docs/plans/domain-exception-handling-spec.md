@@ -10,7 +10,7 @@
 
 **In scope:**
 - `App\Exceptions\DomainException` — abstract base for Service-level business-rule violations (`code` fallback `DOMAIN_EXCEPTION`, HTTP 409, both overridable per subclass).
-- `App\Exceptions\ApiExceptionRenderer` — maps any `Throwable` to a normalized `JsonResponse`, or `null` to defer to Laravel.
+- `App\Exceptions\ApiExceptionRenderer` — maps any `Throwable` to a `data`-wrapped `JsonResponse` (never null; every error path is wrapped).
 - One `$exceptions->render(...)` callback in `bootstrap/app.php` wiring the renderer for JSON requests only.
 - Normalization of the framework exceptions listed in §9 into the `{ code, message, errors? }` envelope.
 - Feature tests for every catalog branch and a regression pass of the existing suite.
@@ -19,6 +19,12 @@
 **Out of scope:**
 - Any concrete `DomainException` subclass. The `Routine` / `Cycle` / `Session` domains do not exist yet; the first real subclass ships with `POST /routines`. `ProfileIncompleteException` appears in this spec only as an illustrative example.
 - Any change to a controller, Action, Service, Form Request, Resource, route, or the database.
+- Fixing the pre-existing test-suite isolation bug (the `app` container exports `CACHE_STORE=redis` / `SESSION_DRIVER=redis`, which `phpunit.xml`'s `<env>` entries do not override without `force="true"`, so rate-limiter and session state leak across tests). The full suite is already red on the untouched branch base for this reason; this change is verified against that baseline, not against a green suite.
+
+**Adjusted during implementation:**
+- The error body is wrapped in a top-level `data` key (product-owner decision, mid-implementation) — so *all* API responses, success and error, share the `{ "data": … }` shape. `data.errors` holds the validation map.
+- Existing assertions updated to match: `assertExactJson([...])` on 401 bodies re-nested under `data` (`tests/Feature/Auth/{CurrentUserTest,LogoutTest,LoginTest}.php`); ~16 `assertJsonValidationErrors('field')` calls across `RegisterTest`, `LoginTest`, `UpdateAthleteProfileTest` given the `'data.errors'` response key; `assertJsonMissingPath('errors')` → `'data.errors'`. No test deleted.
+- The debug passthrough was dropped: `render()` no longer returns `null` for an unhandled throwable while `app.debug` is on. It always returns the `data`-wrapped envelope; in debug the real message plus `exception`/`file`/`line`/`trace` sit under `data`. `render()` is now `: JsonResponse`, non-nullable. The only `null` short-circuit is the non-JSON check in the `bootstrap/app.php` callback.
 - Changing HTTP status codes of existing responses (only the body gains `code`; `errors` is unchanged for validation).
 - A `details` / context field on the envelope.
 - Localization / translation of error messages.
@@ -29,14 +35,15 @@
 
 ### 2.1 REST
 
-Not applicable — no new endpoints. This change rewrites the **error body** of every existing `/api/*` response (and any future one). The contract for that body:
+Not applicable — no new endpoints. This change rewrites the **error body** of every existing `/api/*` response (and any future one). Every response body in the API is wrapped in a top-level `data` key — success bodies already are, via JSON Resources; errors now match. The contract for an error body:
 
 ```json
-{ "code": "SCREAMING_SNAKE_CASE", "message": "Human-readable sentence." }
+{ "data": { "code": "SCREAMING_SNAKE_CASE", "message": "Human-readable sentence." } }
 ```
 
-- `errors` (`{ "field": ["msg", …] }`, Laravel's existing map) is present **only** when `code` is `VALIDATION_EXCEPTION`.
+- `data.errors` (`{ "field": ["msg", …] }`, Laravel's existing map) is present **only** when `data.code` is `VALIDATION_EXCEPTION`.
 - Success bodies are untouched. Per-exception `code` / status mapping is in §9; the before/after per behavior is in §7.
+- In tests: `assertJsonPath('data.code', …)`, `assertJsonMissingPath('data.errors')`, `assertJsonValidationErrors([...], 'data.errors')`.
 
 Two **test-only** routes are registered inside the test files (never in `routes/api.php`) to exercise branches with no natural trigger yet: `GET /api/v1/_test/domain` (throws a stub `DomainException`) and `GET /api/v1/_test/boom` (throws a plain `RuntimeException`).
 
@@ -94,15 +101,17 @@ No new environment variables. `APP_DEBUG` (existing) gains a second effect used 
 
 | Variable | Value / Source | Purpose |
 |---|---|---|
-| `APP_DEBUG` | existing `.env` / `config('app.debug')` | When `true`, an **unrecognized** `Throwable` (the `SERVER_EXCEPTION` branch) is **not** normalized — the renderer returns `null` so Laravel's verbose handler renders the message + stack trace. When `false`, the same `Throwable` renders as `{ "code": "SERVER_EXCEPTION", "message": "Server error." }` with HTTP 500. Recognized exceptions (validation, auth, domain, …) are always normalized regardless of `APP_DEBUG`. |
+| `APP_DEBUG` | existing `.env` / `config('app.debug')` | Only affects the `SERVER_EXCEPTION` branch, and only its **body detail** — the envelope and the `data` wrapper are always applied. `false` → `{ "data": { "code": "SERVER_EXCEPTION", "message": "Server error." } }`. `true` → `message` is the real exception message and `data` also carries `exception`, `file`, `line`, `trace`. HTTP 500 either way. |
 
 ---
 
 ## 7. Current vs New Behavior
 
+Every "New" body below is wrapped in a top-level `data` key — e.g. the row that reads `{ code: "X", message }` is on the wire as `{ "data": { "code": "X", "message": … } }`. Validation's `errors` map sits at `data.errors`.
+
 | Behavior | Current | New |
 |---|---|---|
-| Error body shape (any `/api/*` error) | Varies per exception; no `code` | Always `{ code, message }` (+ `errors` for validation) |
+| Error body shape (any `/api/*` error) | Varies per exception; no `code`; not wrapped | Always `{ data: { code, message } }` (+ `data.errors` for validation) |
 | Validation failure | `422` `{ message, errors }` | `422` `{ code: "VALIDATION_EXCEPTION", message, errors }` — `message` and `errors` byte-for-byte as before, `code` added |
 | Unauthenticated request | `401` `{ message: "Unauthenticated." }` | `401` `{ code: "AUTHENTICATION_EXCEPTION", message: "Unauthenticated." }` |
 | Bad login credentials | `401` `{ message: "These credentials do not match our records." }` | `401` `{ code: "AUTHENTICATION_EXCEPTION", message: "These credentials do not match our records." }`, still no `errors` key |
@@ -113,15 +122,15 @@ No new environment variables. `APP_DEBUG` (existing) gains a second effect used 
 | Rate limit exceeded | `429` `{ message }` + `Retry-After` header | `429` `{ code: "RATE_LIMIT_EXCEPTION", message }` + `Retry-After` / `X-RateLimit-*` headers preserved |
 | Bare `abort($code)` with no dedicated mapping | `$code` `{ message }` | `$code` `{ code: "HTTP_EXCEPTION", message }` |
 | Business-rule violation from a Service | No mechanism (would surface as an unhandled 500) | `DomainException` subclass → its `errorCode()` / `statusCode()` (base: `DOMAIN_EXCEPTION` / 409), rendered as `{ code, message }` |
-| Unhandled `Throwable`, `APP_DEBUG=false` | `500` Laravel generic JSON `{ message: "Server Error" }` | `500` `{ code: "SERVER_EXCEPTION", message: "Server error." }` |
-| Unhandled `Throwable`, `APP_DEBUG=true` | `500` verbose JSON (message, exception, file, line, trace) | Unchanged — renderer returns `null`, Laravel's verbose handler still renders |
-| Non-JSON request (no `api/*` path, no `Accept: application/json`) | Laravel default (HTML error page / redirect) | Unchanged — renderer returns `null` immediately |
+| Unhandled `Throwable`, `APP_DEBUG=false` | `500` Laravel generic JSON `{ message: "Server Error" }` | `500` `{ data: { code: "SERVER_EXCEPTION", message: "Server error." } }` |
+| Unhandled `Throwable`, `APP_DEBUG=true` | `500` verbose flat JSON (`message`, `exception`, `file`, `line`, `trace` at the root) | `500` `{ data: { code: "SERVER_EXCEPTION", message: <real>, exception, file, line, trace } }` — same detail, wrapped |
+| Non-JSON request (no `api/*` path, no `Accept: application/json`) | Laravel default (HTML error page / redirect) | Unchanged — the `bootstrap/app.php` callback returns `null` before the renderer is reached |
 
 ---
 
 ## 8. Test Cases
 
-All executable with `docker compose exec app vendor/bin/pest`. Two files, both at `tests/Feature/` root.
+All executable with `docker compose exec app vendor/bin/pest`. Two files, both at `tests/Feature/` root. Every body assertion targets the `data.*` path (`data.code`, `data.message`, `data.errors`); `getData(true)` in the renderer test returns `['data' => [...]]`.
 
 ### `tests/Feature/ApiExceptionRendererTest.php`
 
@@ -187,10 +196,10 @@ Resolves `ApiExceptionRenderer` from the container and calls `render($throwable)
 - **When:** `render()`
 - **Expect:** status `500`; `code === "SERVER_EXCEPTION"`; `message === "Server error."`; body does not contain `"Redis"` or `"10.0.0.5"`
 
-**TC-13:** Unknown Throwable with `APP_DEBUG=true` is deferred
+**TC-13:** Unknown Throwable with `APP_DEBUG=true` is still wrapped, with debug detail
 - **Given:** `config(['app.debug' => true])`; `new RuntimeException('boom')`
 - **When:** `render()`
-- **Expect:** return value is `null`
+- **Expect:** status `500`; `data.code === "SERVER_EXCEPTION"`; `data.message === "boom"`; `data.exception === RuntimeException::class`; `data` has keys `file`, `line`, `trace`
 
 ### `tests/Feature/ApiExceptionHandlingTest.php`
 
@@ -211,10 +220,7 @@ Drives real HTTP through the kernel so the `bootstrap/app.php` wiring is covered
 - **When:** `postJson('/api/v1/register', [])`
 - **Expect:** `422`; `assertJsonPath('code', 'VALIDATION_EXCEPTION')`; `assertJsonValidationErrors(['name', 'email', 'password'])`; `assertJsonStructure(['code', 'message', 'errors'])`
 
-**TC-17:** Rate limit returns the envelope with `Retry-After`
-- **Given:** the `throttle:6,1` limiter on `POST /api/v1/login`
-- **When:** the endpoint is hit 7 times with a bad body
-- **Expect:** the 7th response is `429`; `assertJsonPath('code', 'RATE_LIMIT_EXCEPTION')`; `assertHeader('Retry-After')` present
+**TC-17:** *(removed)* — an end-to-end rate-limit test cannot be isolated in this suite: Laravel's unnamed `throttle:N,1` keys its bucket by domain + IP only, so any throttled route shares one counter with `login` / `register`, and hitting it corrupts the pre-existing throttle-count tests. `RATE_LIMIT_EXCEPTION` + `Retry-After` preservation is covered by TC-8 at the renderer level.
 
 **TC-18:** Unknown `/api/v1` path returns the envelope
 - **Given:** —
@@ -229,19 +235,24 @@ Drives real HTTP through the kernel so the `bootstrap/app.php` wiring is covered
 **TC-20:** An unhandled Throwable is masked when `APP_DEBUG=false`
 - **Given:** `config(['app.debug' => false])`; the `/api/v1/_test/boom` route throws `new RuntimeException('internal detail')`
 - **When:** `getJson('/api/v1/_test/boom')`
-- **Expect:** `500`; `assertJsonPath('code', 'SERVER_EXCEPTION')`; `assertJsonPath('message', 'Server error.')`; response body does not contain `'internal detail'`
+- **Expect:** `500`; `assertJsonPath('data.code', 'SERVER_EXCEPTION')`; `assertJsonPath('data.message', 'Server error.')`; `assertJsonMissingPath('data.trace')`; response body does not contain `'internal detail'`
+
+**TC-20b:** An unhandled Throwable stays wrapped when `APP_DEBUG=true`
+- **Given:** `config(['app.debug' => true])`; the `/api/v1/_test/boom` route throws `new RuntimeException('internal detail')`
+- **When:** `getJson('/api/v1/_test/boom')`
+- **Expect:** `500`; `assertJsonPath('data.code', 'SERVER_EXCEPTION')`; `assertJsonPath('data.message', 'internal detail')`; `assertJsonStructure(['data' => ['code', 'message', 'exception', 'file', 'line', 'trace']])`; `assertJsonMissingPath('message')` (nothing at the root)
 
 **TC-21:** A non-JSON request is untouched
-- **Given:** `config(['app.debug' => false])`; the `/api/v1/_test/boom` route
-- **When:** `get('/api/v1/_test/boom')` with header `Accept: text/html`
-- **Expect:** the response is **not** the JSON envelope — `code` is absent from the body (Laravel's default HTML/plain handler ran)
+- **Given:** `config(['app.debug' => false])`; a non-`api/*` route `/_test/boom-web` that throws
+- **When:** `get('/_test/boom-web')` with header `Accept: text/html`
+- **Expect:** the `bootstrap/app.php` callback returns `null` before the renderer; Laravel's default HTML handler runs; `Content-Type` is not `application/json`
 
 ### Regression
 
-**TC-22:** The pre-existing suite is unchanged
-- **Given:** the full test tree before this change
-- **When:** `vendor/bin/pest`
-- **Expect:** every previously passing test still passes with no edits to `tests/Feature/Auth/*`, `tests/Feature/Profile/*`, or `tests/Unit/*`
+**TC-22:** No new failures versus the baseline
+- **Given:** the suite's pre-existing failures on the untouched branch base (isolation bug, see §1), captured with Redis flushed
+- **When:** `vendor/bin/pest` on this branch, Redis flushed
+- **Expect:** the failure set is a subset of the baseline — the four `assertExactJson` tests listed in §1 now pass, the 21 new tests pass, and no previously green test turns red. `tests/Feature/Profile/*` and `tests/Unit/*` untouched and green.
 
 ---
 
@@ -293,11 +304,11 @@ final class ProfileIncompleteException extends DomainException
 // throw_if($user->athleteProfile()->doesntExist(), new ProfileIncompleteException());
 ```
 
-Data flow: a `Throwable` (framework or `DomainException` subclass) reaches the `$exceptions->render(...)` callback in `bootstrap/app.php`; for an `api/*` or `expectsJson()` request it is passed to `ApiExceptionRenderer::render()`, which returns a `JsonResponse` of `{ code, message, errors? }` with any `HttpException` headers preserved, or `null` to defer to Laravel.
+Data flow: a `Throwable` (framework or `DomainException` subclass) reaches the `$exceptions->render(...)` callback in `bootstrap/app.php`. That callback returns `null` for a non-`api/*`, non-`expectsJson()` request (Laravel's default rendering then runs); otherwise it calls `ApiExceptionRenderer::render()`, which always returns a `JsonResponse` of `{ "data": { code, message, errors? } }` with any `HttpException` headers preserved.
 
 | Decision area | What was decided | Why |
 |---|---|---|
-| Envelope shape | Flat `{ code, message }`; `errors` added only for `VALIDATION_EXCEPTION`; no `details` field | Closest to Laravel's existing `message`-first bodies; `code` is purely additive so no existing assertion breaks |
+| Envelope shape | `{ data: { code, message } }`; `data.errors` added only for `VALIDATION_EXCEPTION`; no `details` field | Every response body in the API is wrapped in `data` (success via Resources, errors via the renderer) for one consistent shape. `assertJsonValidationErrors` takes `'data.errors'` as its response key; `assertExactJson` calls on error bodies were re-nested |
 | `code` format | `SCREAMING_SNAKE_CASE` string | Requested by the product owner |
 | Domain error identity | For a domain rule, `code` **is** the specific identifier (`ROUTINE_ARCHIVED`, `CYCLE_NOT_DRAFT`, …); `DOMAIN_EXCEPTION` is only the base-class fallback | A client branches on `code`, never on prose |
 | Framework exception mapping | `ValidationException` → `VALIDATION_EXCEPTION` / 422 (+ `errors`); `AuthenticationException` → `AUTHENTICATION_EXCEPTION` / 401; `AuthorizationException` + `AccessDeniedHttpException` → `AUTHORIZATION_EXCEPTION` / 403; `ModelNotFoundException` + `NotFoundHttpException` → `NOT_FOUND_EXCEPTION` / 404 with a generic message; `MethodNotAllowedHttpException` → `METHOD_NOT_ALLOWED_EXCEPTION` / 405; `TokenMismatchException` → `CSRF_TOKEN_MISMATCH` / 419; `ThrottleRequestsException` → `RATE_LIMIT_EXCEPTION` / 429; any other `HttpExceptionInterface` → `HTTP_EXCEPTION` / its own status; everything else → `SERVER_EXCEPTION` / 500 | One shape for every error response; existing status codes are preserved |
@@ -306,9 +317,9 @@ Data flow: a `Throwable` (framework or `DomainException` subclass) reaches the `
 | `DomainException` is `abstract` | Yes — no ad-hoc `throw new DomainException(...)` | Forces a named subclass so every domain `code` is meaningful (decision above) |
 | String code vs SPL `$code` | Expose the string through `errorCode()`; leave SPL's `int $code` alone | `Throwable::$code` is typed `int`; overloading it fights the language |
 | Concrete subclasses in this change | None — infrastructure only; `ProfileIncompleteException` is documented as the example | `Routine` / `Cycle` / `Session` do not exist; a speculative unused class violates `CLAUDE.md` rules 5–6 |
-| Where the mapping lives | A dedicated `final class App\Exceptions\ApiExceptionRenderer` with one method `render(Throwable): ?JsonResponse`, invoked from a single `$exceptions->render(...)` callback | Encapsulated and testable in isolation; it *is* the feature, not indirection (rule 6). The exception handler is the one place `CLAUDE.md` rule 3 sanctions hand-built error JSON — no error "Resource" (Resources are for success bodies) |
+| Where the mapping lives | A dedicated `final class App\Exceptions\ApiExceptionRenderer` with one method `render(Throwable): JsonResponse`, invoked from a single `$exceptions->render(...)` callback (the callback owns the non-JSON `null` short-circuit) | Encapsulated and testable in isolation; it *is* the feature, not indirection (rule 6). The exception handler is the one place `CLAUDE.md` rule 3 sanctions hand-built error JSON — no error "Resource" (Resources are for success bodies) |
 | Non-JSON requests | Renderer returns `null` when `! $request->is('api/*') && ! $request->expectsJson()`, before any mapping | The API is JSON-only, but a stray browser hit should still get Laravel's default, not a bare JSON blob |
-| `APP_DEBUG=true` + unknown `Throwable` | Renderer returns `null` so Laravel's verbose handler renders | Keeps local debugging (message + trace) intact; recognized exceptions are still normalized in debug |
+| `APP_DEBUG=true` + unknown `Throwable` | Renderer still returns the `data`-wrapped envelope, with the real `message` plus `exception` / `file` / `line` / `trace` under `data` | The `data` wrapper is unconditional — there is no unwrapped error path. Local debugging keeps the full detail, just nested |
 | Header preservation | For any `HttpExceptionInterface`, merge `$e->getHeaders()` into the `JsonResponse` | `Retry-After` on 429 and `Allow` on 405 must survive |
 | HTTP status constants | `Symfony\Component\HttpFoundation\Response::HTTP_*` | Already the convention in the codebase (`StoreRoutineController` example in `CLAUDE.md`) |
 | Test location | Both files at `tests/Feature/` root, next to `ArchTest.php`; renderer exercised through a booted app (matches the project keeping `*ActionTest` under `Feature`, since Pest only binds `TestCase` there) | Product-owner preference; `ApiExceptionRenderer` needs the container for `response()` / `config()` |
@@ -322,7 +333,7 @@ Data flow: a `Throwable` (framework or `DomainException` subclass) reaches the `
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Create `app/Exceptions/DomainException.php` — `abstract class DomainException extends RuntimeException` with `protected string $errorCode = 'DOMAIN_EXCEPTION'`, `protected int $statusCode = Response::HTTP_CONFLICT`, and public `errorCode(): string` / `statusCode(): int` accessors. Complete PHPDoc block. | File exists; `vendor/bin/pint app/Exceptions/DomainException.php --test` and `vendor/bin/phpstan analyse` are clean |
-| 2 | Create `app/Exceptions/ApiExceptionRenderer.php` — `final class` with `render(Throwable $e): ?JsonResponse`. Type-check ladder in the §9 order; `HttpExceptionInterface` → `status ⇒ code` lookup with `HTTP_EXCEPTION` default; `SERVER_EXCEPTION` / 500 fallback that returns `null` when `config('app.debug')` is `true`. Body `['code' => …, 'message' => …]`; add `errors` only for `ValidationException`; merge `$e->getHeaders()` for any `HttpException`. Generic message for `NOT_FOUND_EXCEPTION` (`"Resource not found."`) and `SERVER_EXCEPTION` (`"Server error."`). | Pint + PHPStan clean; every branch reachable by a TC in §8 |
+| 2 | Create `app/Exceptions/ApiExceptionRenderer.php` — `final class` with `render(Throwable $e): JsonResponse` (never null). Type-check ladder in the §9 order; `HttpExceptionInterface` → `status ⇒ code` lookup with `HTTP_EXCEPTION` default; `SERVER_EXCEPTION` / 500 fallback — `"Server error."` normally, or the real message plus `exception`/`file`/`line`/`trace` when `config('app.debug')`. Body always `['data' => ['code' => …, 'message' => …, …]]`; add `errors` only for `ValidationException`; merge `$e->getHeaders()` for any `HttpException`. Generic message for `NOT_FOUND_EXCEPTION` (`"Resource not found."`). | Pint + PHPStan clean; every branch reachable by a TC in §8 |
 | 3 | Wire `bootstrap/app.php` — inside the existing `withExceptions` closure add `$exceptions->render(function (Throwable $e, Request $request) { if (! $request->is('api/*') && ! $request->expectsJson()) { return null; } return app(ApiExceptionRenderer::class)->render($e); });`. Leave `shouldRenderJsonWhen` in place. | `docker compose exec app vendor/bin/pest` still boots; no controller/route/service touched |
 | 4 | Add `tests/Feature/ApiExceptionRendererTest.php` with the two stub subclasses and TC-1 … TC-13. | `vendor/bin/pest tests/Feature/ApiExceptionRendererTest.php` green |
 | 5 | Add `tests/Feature/ApiExceptionHandlingTest.php` with the two test-only routes and TC-14 … TC-21. | `vendor/bin/pest tests/Feature/ApiExceptionHandlingTest.php` green |

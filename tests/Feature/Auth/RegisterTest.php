@@ -59,7 +59,7 @@ it('rejects an already registered email with a 422 on the email field', function
 
     $this->postJson('/api/v1/register', registerPayload(['email' => 'taken@example.com']))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('email');
+        ->assertJsonValidationErrors('email', 'data.errors');
 
     $this->assertDatabaseCount('users', 1);
     $this->assertGuest();
@@ -71,7 +71,7 @@ it('rejects an already registered email regardless of casing', function () {
 
     $this->postJson('/api/v1/register', registerPayload(['email' => 'TAKEN@example.com']))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('email');
+        ->assertJsonValidationErrors('email', 'data.errors');
 
     $this->assertDatabaseCount('users', 1);
 });
@@ -83,7 +83,7 @@ it('rejects a password that does not match its confirmation', function () {
         'password_confirmation' => 'other-password',
     ]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('password');
+        ->assertJsonValidationErrors('password', 'data.errors');
 
     $this->assertDatabaseCount('users', 0);
     $this->assertGuest();
@@ -96,7 +96,7 @@ it('rejects a password shorter than the minimum length', function () {
         'password_confirmation' => 'short',
     ]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('password');
+        ->assertJsonValidationErrors('password', 'data.errors');
 
     $this->assertGuest();
 });
@@ -108,7 +108,7 @@ it('requires a name', function () {
 
     $this->postJson('/api/v1/register', $payload)
         ->assertStatus(422)
-        ->assertJsonValidationErrors('name');
+        ->assertJsonValidationErrors('name', 'data.errors');
 });
 
 // TC-9
@@ -118,7 +118,7 @@ it('requires a valid email', function (mixed $email) {
 
     $this->postJson('/api/v1/register', $payload)
         ->assertStatus(422)
-        ->assertJsonValidationErrors('email');
+        ->assertJsonValidationErrors('email', 'data.errors');
 })->with([
     'missing' => [null],
     'malformed' => ['not-an-email'],
@@ -131,7 +131,7 @@ it('requires a password', function () {
 
     $this->postJson('/api/v1/register', $payload)
         ->assertStatus(422)
-        ->assertJsonValidationErrors('password');
+        ->assertJsonValidationErrors('password', 'data.errors');
 });
 
 // TC-11

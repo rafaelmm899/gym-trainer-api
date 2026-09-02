@@ -43,7 +43,7 @@ it('rejects a wrong password with a generic 401 and no session', function () {
 
     $this->postJson('/api/v1/login', ['email' => 'ada@example.com', 'password' => 'wrong-password'])
         ->assertStatus(401)
-        ->assertExactJson(['message' => 'These credentials do not match our records.']);
+        ->assertExactJson(['data' => ['code' => 'AUTHENTICATION_EXCEPTION', 'message' => 'These credentials do not match our records.']]);
 
     $this->assertGuest();
 });
@@ -52,8 +52,8 @@ it('rejects a wrong password with a generic 401 and no session', function () {
 it('rejects an unknown email with the same generic 401', function () {
     $this->postJson('/api/v1/login', ['email' => 'nobody@example.com', 'password' => 'password'])
         ->assertStatus(401)
-        ->assertExactJson(['message' => 'These credentials do not match our records.'])
-        ->assertJsonMissingPath('errors');
+        ->assertExactJson(['data' => ['code' => 'AUTHENTICATION_EXCEPTION', 'message' => 'These credentials do not match our records.']])
+        ->assertJsonMissingPath('data.errors');
 
     $this->assertGuest();
 });
@@ -62,21 +62,21 @@ it('rejects an unknown email with the same generic 401', function () {
 it('requires an email', function () {
     $this->postJson('/api/v1/login', ['password' => 'password'])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('email');
+        ->assertJsonValidationErrors('email', 'data.errors');
 });
 
 // TC-7
 it('requires a password', function () {
     $this->postJson('/api/v1/login', ['email' => 'ada@example.com'])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('password');
+        ->assertJsonValidationErrors('password', 'data.errors');
 });
 
 // TC-8
 it('requires a valid email', function (mixed $email) {
     $this->postJson('/api/v1/login', ['email' => $email, 'password' => 'password'])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('email');
+        ->assertJsonValidationErrors('email', 'data.errors');
 })->with([
     'malformed' => ['not-an-email'],
     'non-string' => [123],
