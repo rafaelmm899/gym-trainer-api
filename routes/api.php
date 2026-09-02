@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
+use App\Http\Controllers\Routine\StoreRoutineController;
 use Illuminate\Support\Facades\Route;
 
 // Public: no auth:sanctum, no Policy — no actor and no resource yet.
@@ -26,4 +27,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     // Profile: 1:1 with the user; the Form Requests delegate authorization to AthleteProfilePolicy.
     Route::get('profile', ShowAthleteProfileController::class)->name('profile.show');
     Route::put('profile', UpdateAthleteProfileController::class)->name('profile.update');
+
+    // Routines: the Form Request delegates authorization to RoutinePolicy.
+    Route::post('routines', StoreRoutineController::class)->name('routines.store');
 });
