@@ -16,12 +16,13 @@ it('documents auth with a cookie scheme and keeps the public routes open', funct
     // The scheme is applied at the document root, so the auth:sanctum operations
     // inherit it without a per-operation override.
     expect($spec['security'])->not->toBeEmpty()
-        ->and($spec['paths']['/v1/logout']['post'])->not->toHaveKey('security')
-        ->and($spec['paths']['/v1/user']['get'])->not->toHaveKey('security')
-        ->and($spec['paths']['/v1/profile']['get'])->not->toHaveKey('security')
-        ->and($spec['paths']['/v1/profile']['put'])->not->toHaveKey('security');
+        ->and($spec['paths']['/api/v1/logout']['post'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/user']['get'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/profile']['get'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/profile']['put'])->not->toHaveKey('security');
 
     // The public operations opt out explicitly.
-    expect($spec['paths']['/v1/login']['post']['security'])->toBe([])
-        ->and($spec['paths']['/v1/register']['post']['security'])->toBe([]);
+    expect($spec['paths']['/api/v1/login']['post']['security'])->toBe([])
+        ->and($spec['paths']['/api/v1/register']['post']['security'])->toBe([])
+        ->and($spec['paths']['/sanctum/csrf-cookie']['get']['security'])->toBe([]);
 });
