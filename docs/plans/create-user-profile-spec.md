@@ -83,6 +83,9 @@ Notes:
 - Errors are rendered as JSON by the exception handler already configured in
   `bootstrap/app.php` for `api/*`. No hand-built JSON. `401` comes from the
   `auth:sanctum` middleware's `AuthenticationException`.
+- `403` is intentionally absent: every request operates on the caller's own
+  profile (no id in the URL), so `AthleteProfilePolicy`'s ownership check can
+  never fail and `create` is always allowed (§5.2).
 - `GET /sanctum/csrf-cookie` (registered by Sanctum at the app root) is unchanged;
   a browser client calls it before the `PUT`.
 
@@ -185,6 +188,10 @@ ticket introduces the first Policy.
   `$request->user()->athleteProfile()` — no code path accepts a profile id, so
   cross-user access is structurally impossible. The Policy is the formal rule-4
   gate and future-proofing.
+- **`403` is unreachable in this ticket.** Because the resource is always
+  `$request->user()->athleteProfile()`, the `view` / `update` ownership check
+  cannot fail for the caller and `create` always returns `true`. The Policy can
+  only deny once a future endpoint addresses a profile by id.
 
 ---
 
@@ -211,6 +218,11 @@ need (`DB_CONNECTION=sqlite`, `DB_DATABASE=:memory:`, `SANCTUM_STATEFUL_DOMAINS=
 No change to `config/auth.php`, `config/sanctum.php`, `config/cors.php`,
 `bootstrap/app.php`, `bootstrap/providers.php`, `phpunit.xml`, `composer.json`.
 
+- Scramble's `GET /docs/api.json` route is served in non-production environments;
+  TC-27 depends on it being reachable under `APP_ENV=testing`. If it is gated off
+  there, TC-27 is skipped with a documented reason and the OpenAPI security check
+  falls to the manual `curl` task (§10, Task 23).
+
 ---
 
 ## 7. Current vs New Behavior
@@ -224,7 +236,7 @@ No change to `config/auth.php`, `config/sanctum.php`, `config/cors.php`,
 | Enums | `app/Enums/` does not exist. | `App\Enums\Profile\ExperienceLevel` and `App\Enums\Shared\Goal` — first backed enums, matching `docs/plans/data-model.md` §Enums. |
 | `User` model | No relations. | `athleteProfile(): HasOne` relation + `@property-read` PHPDoc line. |
 | OpenAPI auth docs | `config/scramble.php` `security_strategy => null`; every route documented as unsecured. | `MiddlewareAuthSecurityStrategy` (apiKey/cookie): `/api/v1/profile` documented as secured, `/api/v1/register` explicitly `security: []`. |
-| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test), `tests/Unit/Profile/` (DTO + Policy), one added `tests/Feature/ArchTest.php` rule. |
+| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test), `tests/Unit/Profile/` (DTO + Policy), `tests/Feature/Docs/ApiDocsSecurityTest.php`, one added `tests/Feature/ArchTest.php` rule. |
 
 ---
 
@@ -236,6 +248,14 @@ Every feature test's `beforeEach` sets
 `$this->actingAs($user)`. Base valid payload:
 `experience_level` = `"intermediate"`, `days_per_week` = `4`,
 `session_minutes` = `60`, `goal` = `"hypertrophy"`, `notes` = `"bad left knee"`.
+
+TC-23, TC-24 and TC-25 are white-box unit tests on the Action, DTO and Policy;
+the HTTP behaviour they touch is already covered end to end by TC-1 … TC-22.
+TC-24 and TC-25 must not hit the database — TC-24 builds from a plain array and
+TC-25 from in-memory model instances — so they run in the `Unit` suite (which has
+no `RefreshDatabase`), the same way `RegisterRequestTest` stays DB-free. TC-23
+does touch the database, so it lives under `tests/Feature/` like
+`UserRegisterActionTest`.
 
 ### PUT `/api/v1/profile` — `tests/Feature/Profile/UpdateAthleteProfileTest.php`
 
@@ -368,7 +388,7 @@ Every feature test's `beforeEach` sets
 ### Policy — `tests/Unit/Profile/AthleteProfilePolicyTest.php`
 
 **TC-25:** Ownership checks
-- **Given:** `$owner` with an `AthleteProfile`, and `$stranger` (another user)
+- **Given:** two in-memory `User` instances (`$owner` with `id` 1, `$stranger` with `id` 2) and an in-memory `AthleteProfile` with `user_id` 1 — nothing persisted, so the test runs in the `Unit` suite
 - **When:** the policy abilities are evaluated
 - **Expect:** `view($owner, $profile)` and `update($owner, $profile)` are `true`; `view($stranger, $profile)` and `update($stranger, $profile)` are `false`; `create($stranger)` is `true`
 
@@ -378,6 +398,13 @@ Every feature test's `beforeEach` sets
 - **Given:** the project code
 - **When:** the Pest architecture assertions run
 - **Expect:** `App\Http\Controllers\Profile` is invokable (new `arch(...)` line); the existing rules (`App\Actions\*` final + `handle()`, `App\Http\Requests\*` extends `FormRequest`, no debug helpers) still pass
+
+### OpenAPI — `tests/Feature/Docs/ApiDocsSecurityTest.php`
+
+**TC-27:** The generated OpenAPI spec marks the profile routes secured
+- **Given:** the app under `APP_ENV=testing` with `security_strategy` set to `MiddlewareAuthSecurityStrategy` (§6)
+- **When:** `GET /docs/api.json`
+- **Expect:** `200`; `paths./api/v1/profile.get` and `paths./api/v1/profile.put` each carry a non-empty `security` array; `paths./api/v1/register.post` carries `security: []`. If Scramble's doc route is not served under `APP_ENV=testing`, the test is skipped with an explicit reason and the same assertions are verified manually in §10 Task 23.
 
 ---
 
@@ -401,6 +428,7 @@ Every feature test's `beforeEach` sets
 | `id` in the body | Not exposed on either endpoint | `athlete_profiles` is an internal table (no `uuid`, addressed as "the current user's profile"). Consistent with `UserResource`. |
 | DTO | `App\Data\Profile\AthleteProfileData` (`spatie/laravel-data`), `readonly` promoted props, `#[MapInputName(SnakeCaseMapper::class)]` | `CLAUDE.md` convention (writes take a `Data` object). Global name mapping is off in `config/data.php`, so the class maps `snake_case` input to camelCase props itself. `validation_strategy = OnlyRequests` → `::from($request->validated())` does not re-validate; the Form Request is the single authority. spatie casts the enum strings via the global `BackedEnum` cast. |
 | Authorization enforcement | `AthleteProfilePolicy` (auto-discovered) for the rule-4 gate; real isolation by query-scoping to `$request->user()->athleteProfile()` | No route accepts a profile id, so cross-user access is structurally impossible. The Policy formalises the rule and is delegated to from each Form Request's `authorize()`. |
+| `403` responses | Not part of the `PUT` / `GET` contract | The resource is always the caller's own profile (no id in the URL): the Policy's ownership check cannot fail and `create` is always allowed. A `403` path would only appear if a future endpoint addressed a profile by id. |
 | `AuthServiceProvider` | Not created | Laravel 13 resolves `App\Policies\{Model}Policy` by convention with zero wiring. A provider would only be needed for a non-conventional name. |
 | Route grouping | One `Route::middleware('auth:sanctum')->group(...)` for both routes | Two routes share the middleware and the domain will grow (routines, cycles, sessions). Keeps `routes/api.php` in its existing plain-`Route::` style; `use` imports at the top for PHPStan. |
 | Rate limiting | None on the profile routes | Authenticated, low-abuse. `register`'s `throttle:6,1` exists because it is public and unauthenticated. |
@@ -414,38 +442,37 @@ Every feature test's `beforeEach` sets
 ## 10. Work Plan
 
 Pipeline classes are created before wiring `routes/api.php` (which references
-them). Tasks whose artifact is a single pipeline class are not independently
-shippable — tasks 18–19 (feature suites) are the functional gate; each earlier
+them). Tasks 18–19 (the feature suites) are the functional gate; each earlier
 task's DoD is limited to the artifact existing, passing Pint + PHPStan level 6,
-and (where it carries logic) a focused unit assertion.
+and — where the class carries logic — its focused unit or feature test, authored
+in the same task.
 
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Clone the runtime DB for isolation: `docker compose exec pgsql createdb -U gym -T gym_trainer gym_trainer_create_user_profile`; set `DB_DATABASE=gym_trainer_create_user_profile` in this worktree's `.env` | `docker compose exec app php artisan db:show` targets the clone; `gym_trainer` is untouched; the Pest suite still uses SQLite. |
 | 2 | Create `app/Enums/Shared/Goal.php` (string-backed, 5 `TitleCase` cases) and `app/Enums/Profile/ExperienceLevel.php` (3 cases) | Both files exist; `Goal::from('fat_loss') === Goal::FatLoss`; Pint + PHPStan level 6 clean. |
 | 3 | Create the migration `<ts>_create_athlete_profiles_table.php` per §4.1 (anonymous class; `user_id` unique + `constrained()->cascadeOnDelete()`; enum columns as `string`; `notes` nullable text) | `docker compose exec app php artisan migrate` runs on the clone and on a fresh SQLite; `php artisan db:table athlete_profiles` shows the `unique` index on `user_id` and the FK. |
-| 4 | Create `app/Models/AthleteProfile.php`: `#[Fillable([...6 columns])]`, `casts()` (`experience_level` / `goal` enum casts, two `integer` casts), `user(): BelongsTo`; add `athleteProfile(): HasOne` to `app/Models/User.php` | Pint + PHPStan clean; in a scratch test `AthleteProfile::factory()->for(User::factory())->create()` persists one row and `$user->athleteProfile()->exists()` is `false` for a fresh user. |
-| 5 | Create `database/factories/AthleteProfileFactory.php` (§Model → Factory): valid random enum via `->randomElement(...::cases())`, `days_per_week` 2–6, `session_minutes` ∈ `[30,45,60,75,90]`, `notes => fake()->optional()->sentence()` | `AthleteProfile::factory()->create()` and `User::factory()->has(AthleteProfile::factory())->create()` both work; Pint + PHPStan clean. |
+| 4 | Create `app/Models/AthleteProfile.php`: `#[Fillable([...6 columns])]`, `casts()` (`experience_level` / `goal` enum casts, two `integer` casts), `user(): BelongsTo`; add `athleteProfile(): HasOne` to `app/Models/User.php` | Pint + PHPStan clean; `(new AthleteProfile)->getCasts()` includes the `experience_level` and `goal` enum casts; `(new User)->athleteProfile()` returns a `HasOne`. No factory is used yet. |
+| 5 | Create `database/factories/AthleteProfileFactory.php`: valid random enum via `->randomElement(...::cases())`, `days_per_week` 2–6, `session_minutes` ∈ `[30,45,60,75,90]`, `notes => fake()->optional()->sentence()` | `AthleteProfile::factory()->create()` and `User::factory()->has(AthleteProfile::factory())->create()` each persist one row; `$user->athleteProfile()->exists()` is `false` for a fresh user; Pint + PHPStan clean. |
 | 6 | Run `docker compose exec app php artisan ide-helper:models --write` for `AthleteProfile` + `User`; Pint the two models; hand-check the enum-cast `@property` lines | The PHPDoc blocks list every column/relation; `composer check`'s PHPStan step sees the new `@property` / `@method`; the diff is limited to the two models. |
-| 7 | Create `app/Data/Profile/AthleteProfileData.php` via `make:data`, move into `app/Data/Profile/`, fix the namespace; `#[MapInputName(SnakeCaseMapper::class)]`; `readonly` promoted props `ExperienceLevel $experienceLevel`, `int $daysPerWeek`, `int $sessionMinutes`, `Goal $goal`, `?string $notes = null` | `AthleteProfileData::from(['experience_level' => 'beginner', 'days_per_week' => 3, 'session_minutes' => 45, 'goal' => 'strength'])` builds with enums cast and `notes` `null` (TC-24); Pint + PHPStan clean. |
-| 8 | Create `app/Policies/AthleteProfilePolicy.php` (`final`, `view` / `create` / `update` per §5.2) | `Gate::getPolicyFor(AthleteProfile::class)` resolves it via auto-discovery; TC-25 passes; Pint + PHPStan clean. |
+| 7 | Create `app/Data/Profile/AthleteProfileData.php` via `make:data`, move into `app/Data/Profile/`, fix the namespace; `#[MapInputName(SnakeCaseMapper::class)]`; `readonly` promoted props `ExperienceLevel $experienceLevel`, `int $daysPerWeek`, `int $sessionMinutes`, `Goal $goal`, `?string $notes = null`. Write `tests/Unit/Profile/AthleteProfileDataTest.php` (TC-24) | `docker compose exec app vendor/bin/pest tests/Unit/Profile/AthleteProfileDataTest.php` green (TC-24 — builds from a plain array, no DB); Pint + PHPStan clean. |
+| 8 | Create `app/Policies/AthleteProfilePolicy.php` (`final`, `view` / `create` / `update` per §5.2). Write `tests/Unit/Profile/AthleteProfilePolicyTest.php` (TC-25) | `Gate::getPolicyFor(AthleteProfile::class)` resolves it via auto-discovery; `vendor/bin/pest tests/Unit/Profile/AthleteProfilePolicyTest.php` green (TC-25 — in-memory model instances, no DB); Pint + PHPStan clean. |
 | 9 | Create `app/Http/Requests/Profile/UpdateAthleteProfileRequest.php`: `authorize()` delegating to the Policy (`create` when no row, `update` against the instance, `false` for a `null` user); `rules()` per §2.1; `prepareForValidation()` mapping blank `notes` → `null` | File exists; Pint + PHPStan clean; a unit assertion that `experience_level = 'expert'` fails and a whitespace-only `notes` becomes `null`. |
 | 10 | Create `app/Http/Requests/Profile/ShowAthleteProfileRequest.php`: `rules(): []`; `authorize()` — `null` user → `false`, else `view` (or `true` when no row) | File exists; Pint + PHPStan clean. |
 | 11 | Create `app/Http/Resources/Profile/AthleteProfileResource.php` (`@mixin AthleteProfile`): `experience_level` / `goal` as `->value`, the two ints, `notes`, `created_at` / `updated_at` as `?->toIso8601String()`; **no `id`** | File exists; Pint + PHPStan clean; no `id` key in `toArray()`. |
 | 12 | Create `app/Http/Resources/Profile/AthleteProfileStatusResource.php`: constructor `?AthleteProfile $profile`; `toArray()` → `{ onboarding_completed: $profile !== null, profile: $profile ? (new AthleteProfileResource($profile))->toArray($request) : null }` | File exists; Pint + PHPStan clean; `AthleteProfileStatusResource::make(null)` renders `{ onboarding_completed: false, profile: null }`. |
-| 13 | Create `app/Actions/Profile/AthleteProfileUpdateAction.php` (`final`, `handle(User, AthleteProfileData): AthleteProfile` → `$user->athleteProfile()->updateOrCreate([], [...])`) | `final` + `handle()`; TC-23 passes (create then update keeps count 1, `wasRecentlyCreated` flips); Pint + PHPStan clean. |
+| 13 | Create `app/Actions/Profile/AthleteProfileUpdateAction.php` (`final`, `handle(User, AthleteProfileData): AthleteProfile` → `$user->athleteProfile()->updateOrCreate([], [...])`). Write `tests/Feature/Profile/AthleteProfileUpdateActionTest.php` (TC-23) | `final` + `handle()`; `vendor/bin/pest tests/Feature/Profile/AthleteProfileUpdateActionTest.php` green (TC-23 — create then update keeps count 1, `wasRecentlyCreated` flips); Pint + PHPStan clean. |
 | 14 | Create `app/Http/Controllers/Profile/UpdateAthleteProfileController.php` via `make:controller --invokable`, move + fix namespace: build the DTO, call the Action, return `AthleteProfileStatusResource::make($profile)->response()->setStatusCode($profile->wasRecentlyCreated ? 201 : 200)` | `final`, `__invoke` only; Pint + PHPStan clean. |
 | 15 | Create `app/Http/Controllers/Profile/ShowAthleteProfileController.php` (`final`, `__invoke` → `AthleteProfileStatusResource::make($request->user()->athleteProfile()->first())`) | `final`, `__invoke` only; Pint + PHPStan clean. |
 | 16 | Edit `routes/api.php`: add `use` imports for both controllers and a `Route::middleware('auth:sanctum')->group(...)` with `GET profile` → `profile.show` and `PUT profile` → `profile.update` | `docker compose exec app php artisan route:list` shows `GET|PUT api/v1/profile` with `auth:sanctum` middleware; PHPStan clean in `routes/`. |
-| 17 | Edit `config/scramble.php`: set `security_strategy` to `MiddlewareAuthSecurityStrategy` with a `SecurityScheme::apiKey('cookie', config('session.cookie'))` scheme; verify the helper signature against `composer show dedoc/scramble` first | `GET /docs/api.json` marks `/api/v1/profile` with `security` and `/api/v1/register` with `security: []`; the doc build logs no errors. |
+| 17 | Edit `config/scramble.php`: set `security_strategy` to `MiddlewareAuthSecurityStrategy` with a `SecurityScheme::apiKey('cookie', config('session.cookie'))` scheme; verify the helper signature against `composer show dedoc/scramble` first. Write `tests/Feature/Docs/ApiDocsSecurityTest.php` (TC-27) | `vendor/bin/pest tests/Feature/Docs/ApiDocsSecurityTest.php` green — the `/api/v1/profile` operations carry a non-empty `security`, `/api/v1/register` carries `security: []`. If Scramble's `/docs/api.json` is not served under `APP_ENV=testing`, TC-27 is skipped with a documented reason and the check falls to Task 23; the doc build logs no errors either way. |
 | 18 | Write `tests/Feature/Profile/UpdateAthleteProfileTest.php` covering TC-1 … TC-17 (`beforeEach` sets the `Origin` header) | `docker compose exec app vendor/bin/pest tests/Feature/Profile/UpdateAthleteProfileTest.php` all green; every TC-1…TC-17 has a corresponding test. |
 | 19 | Write `tests/Feature/Profile/ShowAthleteProfileTest.php` covering TC-18 … TC-22 | `docker compose exec app vendor/bin/pest tests/Feature/Profile/ShowAthleteProfileTest.php` all green. |
-| 20 | Write `tests/Feature/Profile/AthleteProfileUpdateActionTest.php` (TC-23) and `tests/Unit/Profile/AthleteProfileDataTest.php` (TC-24) + `tests/Unit/Profile/AthleteProfilePolicyTest.php` (TC-25) | The three files run green in isolation. |
-| 21 | Add the `arch('profile controllers are invokable')->expect('App\Http\Controllers\Profile')->toBeInvokable()` line to `tests/Feature/ArchTest.php` (TC-26) | `docker compose exec app vendor/bin/pest tests/Feature/ArchTest.php` green. |
-| 22 | Run `docker compose exec app vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then a final `php artisan ide-helper:models --write` + Pint on the models | Pint reports no diffs; PHPStan level 6 clean; the model PHPDoc is in sync with the migration. |
-| 23 | Run `docker compose exec app composer check` (Pint `--test` + PHPStan level 6 + full Pest) | All three steps green. |
-| 24 | Manual check with `curl` against `http://localhost:8000`: `GET /sanctum/csrf-cookie` → `PUT /api/v1/profile` (`201`, `onboarding_completed:true`) → `PUT` again (`200`) → `GET` (`200`) → invalid `experience_level` (`422` on the field) → no session (`401`); review `GET /docs/api` | The `curl` calls return the expected codes; the endpoints appear in Scramble with the request inferred from `UpdateAthleteProfileRequest` and the response from `AthleteProfileStatusResource`, marked secured. |
-| 25 | On merge / branch drop: `docker compose exec pgsql dropdb -U gym --if-exists gym_trainer_create_user_profile`; revert `DB_DATABASE` in `.env` | The clone is gone; `.env` is restored to `gym_trainer`. |
+| 20 | Add the `arch('profile controllers are invokable')->expect('App\Http\Controllers\Profile')->toBeInvokable()` line to `tests/Feature/ArchTest.php` (TC-26) | `docker compose exec app vendor/bin/pest tests/Feature/ArchTest.php` green. |
+| 21 | Run `docker compose exec app vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then a final `php artisan ide-helper:models --write` + Pint on the models | Pint reports no diffs; PHPStan level 6 clean; the model PHPDoc is in sync with the migration. |
+| 22 | Run `docker compose exec app composer check` (Pint `--test` + PHPStan level 6 + full Pest — including the new `Profile`, `Docs` and arch tests) | All three steps green. |
+| 23 | Manual check with `curl` against `http://localhost:8000`: `GET /sanctum/csrf-cookie` → `PUT /api/v1/profile` (`201`, `onboarding_completed:true`) → `PUT` again (`200`) → `GET` (`200`) → invalid `experience_level` (`422` on the field) → no session (`401`). Review `GET /docs/api`; fetch `GET /docs/api.json` and confirm the `/api/v1/profile` operations carry `security` and `/api/v1/register` carries `security: []` (covers TC-27 when it was skipped under `APP_ENV=testing`) | The `curl` calls return the expected codes; the endpoints appear in Scramble with the request inferred from `UpdateAthleteProfileRequest` and the response from `AthleteProfileStatusResource`, marked secured; the `security` metadata matches. |
+| 24 | On merge / branch drop: `docker compose exec pgsql dropdb -U gym --if-exists gym_trainer_create_user_profile`; revert `DB_DATABASE` in `.env` | The clone is gone; `.env` is restored to `gym_trainer`. |
 
 *Process note: branch name, commit messages and PR text follow `CLAUDE.md` /
 `AGENTS.md` — English only, no `Co-Authored-By: Claude` / `Claude-Session:`
