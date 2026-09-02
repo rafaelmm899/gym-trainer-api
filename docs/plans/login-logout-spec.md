@@ -7,7 +7,7 @@
 
 ## 1. Context
 
-**Kind:** Greenfield Feature
+**Kind:** Brownfield Feature
 
 **Stack:** PHP 8.5 · Laravel 13 · PostgreSQL 17 (runtime) / SQLite `:memory:` (tests) ·
 Pest 4 (`pest-plugin-laravel`) · `laravel/sanctum` 4 · `spatie/laravel-data` 4.23 ·
@@ -190,7 +190,7 @@ added by the register ticket and already cover login/logout.
 
 | File | Change |
 |---|---|
-| `config/scramble.php` | Enable `security_strategy`. Replace `'security_strategy' => null` with the `[class, options]` form of `MiddlewareAuthSecurityStrategy` so matched routes carry a **cookie** `apiKey` scheme (session cookie), not the default `bearer`: `['middleware' => ['auth:sanctum'], 'scheme' => SecurityScheme::apiKey('cookie', config('session.cookie'))]`. Confirm the exact `SecurityScheme` factory signature against the installed `dedoc/scramble` version (`composer show dedoc/scramble` / `search-docs`). Routes without `auth:sanctum` (`register`, `login`) stay `security: []`. |
+| `config/scramble.php` | Enable `security_strategy`. Replace `'security_strategy' => null` with the `[class, options]` form of `MiddlewareAuthSecurityStrategy` so matched routes carry a **cookie** `apiKey` scheme (session cookie), not the default `bearer`: `['middleware' => ['auth:sanctum'], 'scheme' => SecurityScheme::apiKey('cookie', config('session.cookie'))]`. Confirm the exact `SecurityScheme` factory signature against the installed `dedoc/scramble` version (`composer show dedoc/scramble` / `search-docs`). Routes without `auth:sanctum` (`register`, `login`) stay `security: []`. The scheme is **informational only** — the session cookie is encrypted and dynamically named, so the docs UI "Try it" cannot authenticate with it. |
 | `routes/api.php` | Add `POST login` (with `throttle:6,1`) and an `auth:sanctum` group holding `POST logout` + `GET user`; add the three `use` imports (PHPStan analyses `routes/`). |
 
 No `composer` change (no new dependency), no config publish (all already
@@ -221,6 +221,11 @@ Executable with Pest 4 on SQLite `:memory:` (`RefreshDatabase`, already active f
 whose password is the factory default `'password'`. The exact bad-credentials body
 is `{ "message": "These credentials do not match our records." }`.
 
+TC-18…TC-20 are deliberate white-box coverage of the two Actions layered on top of
+the HTTP-level cases (the same success / failure / logout paths are also exercised
+through the real endpoints in TC-1/TC-3, TC-4/TC-5 and TC-13), mirroring the
+existing `UserRegisterActionTest`.
+
 ### Login — `tests/Feature/Auth/LoginTest.php`
 
 **TC-1:** Valid credentials start a session and return the user
@@ -249,17 +254,17 @@ is `{ "message": "These credentials do not match our records." }`.
 - **Expect:** `401`; body identical to TC-4; `assertJsonMissingPath('errors')`; `assertGuest()`
 
 **TC-6:** Missing `email` → `422` on `email`
-- **Given:** no precondition
+- **Given:** an empty `users` table; an unauthenticated request
 - **When:** `POST /api/v1/login` without `email`
 - **Expect:** `422`; `assertJsonValidationErrors('email')`
 
 **TC-7:** Missing `password` → `422` on `password`
-- **Given:** no precondition
+- **Given:** an empty `users` table; an unauthenticated request
 - **When:** `POST /api/v1/login` without `password`
 - **Expect:** `422`; `assertJsonValidationErrors('password')`
 
 **TC-8:** Malformed `email` → `422` on `email` (dataset: `"not-an-email"`, `123`)
-- **Given:** no precondition
+- **Given:** an empty `users` table; an unauthenticated request
 - **When:** `POST /api/v1/login` with each dataset value as `email` and a valid `password`
 - **Expect:** `422`; `assertJsonValidationErrors('email')`
 
@@ -333,12 +338,21 @@ the Action: `$this->app['request']->setLaravelSession($this->app->make('session.
 - **When:** `app(UserLogoutAction::class)->handle()`
 - **Expect:** `Auth::check()` is `false`
 
-**TC-21 (arch — already covered, no new test):** the existing
-`tests/Feature/ArchTest.php` assertions (`App\Actions\*` final + `handle()`,
-`App\Http\Controllers\Auth\*` invokable, `App\Http\Requests\*` extends
+### API docs security — `tests/Feature/Auth/DocsSecurityTest.php`
+
+**TC-21:** Scramble marks the protected routes as secured and the public ones as open
+- **Given:** `config('scramble.security_strategy')` enabled with the cookie scheme (§6); routes registered
+- **When:** `GET /docs/api.json`
+- **Expect:** `200`; `security` on `paths./api/v1/logout.post` and `paths./api/v1/user.get` is a non-empty array referencing the cookie `apiKey` scheme; `paths./api/v1/login.post` and `paths./api/v1/register.post` have `security: []`; the document defines exactly one `components.securitySchemes` entry and its `type` is `apiKey` with `in: cookie` (not `http`/`bearer`)
+
+### Architecture coverage (no new test case)
+
+The existing `tests/Feature/ArchTest.php` assertions (`App\Actions\*` final +
+`handle()`, `App\Http\Controllers\Auth\*` invokable, `App\Http\Requests\*` extends
 `FormRequest`) automatically cover `UserLoginAction`, `UserLogoutAction`,
 `LoginController`, `LogoutController`, `CurrentUserController` and `LoginRequest`.
-No addition needed; listed so the reviewer can confirm the coverage.
+No new arch test is added; task 13 confirms the suite still passes with the new
+classes in place.
 
 ---
 
@@ -372,28 +386,28 @@ No addition needed; listed so the reviewer can confirm the coverage.
 ## 10. Work Plan
 
 Tasks 1–8 create pipeline artifacts and are **not independently shippable**;
-tasks 9–12 are the functional gate that exercises them end to end. Each earlier
-task's DoD is limited to the artifact existing and passing Pint + PHPStan (plus a
-focused unit assertion where it carries logic). Run the toolchain via the one-off
-container from §9.
+tasks 9–12 are the functional gate that exercises them end to end. Each Action
+task also authors its own unit test (so no task's DoD depends on a test file a
+later task produces); the other earlier tasks' DoD is limited to the artifact
+existing and passing Pint + PHPStan. Run the toolchain via the one-off container
+from §9.
 
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Create `app/Http/Requests/Auth/LoginRequest.php` (`authorize(): true`; `rules()` → `email` `['required','string','email']`, `password` `['required','string']`; `prepareForValidation()` lowercases + trims `email`, copied from `RegisterRequest`) via `make:request`, move to `app/Http/Requests/Auth/`, fix the namespace | The file exists; Pint + PHPStan level 6 clean; a unit assertion that `prepareForValidation()` maps `'  Ada@Example.COM '` → `'ada@example.com'` passes (mirrors `RegisterRequestTest`). |
 | 2 | Create `app/Data/Auth/LoginData.php` (`final`, readonly `string $email, string $password`) via `make:data`, move to `app/Data/Auth/`, fix the namespace | `LoginData::from(['email' => …, 'password' => …])` builds the DTO; Pint + PHPStan clean. |
-| 3 | Create `app/Actions/Auth/UserLoginAction.php` (`final`, `handle(LoginData $data): User` → `throw_unless(Auth::attempt(['email' => $data->email, 'password' => $data->password]), new AuthenticationException('These credentials do not match our records.'))` → `request()->session()->regenerate()` → `return Auth::user()`) via `make:class`, place under `app/Actions/Auth/` | The file exists; Pint + PHPStan clean; TC-18 and TC-19 pass. |
-| 4 | Create `app/Http/Controllers/Auth/LoginController.php` (`final`, `__invoke(LoginRequest $request, UserLoginAction $action): JsonResponse` → `UserResource::make($action->handle(LoginData::from($request->validated())))` returned as a `200`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
-| 5 | Create `app/Actions/Auth/UserLogoutAction.php` (`final`, `handle(): void` → `Auth::guard('web')->logout()` → `request()->session()->invalidate()` → `request()->session()->regenerateToken()`) | The file exists; Pint + PHPStan clean; TC-20 passes. |
-| 6 | Create `app/Http/Controllers/Auth/LogoutController.php` (`final`, `__invoke(Request $request, UserLogoutAction $action): Response` → `$action->handle()` → `response()->noContent()`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
-| 7 | Create `app/Http/Controllers/Auth/CurrentUserController.php` (`final`, `__invoke(Request $request): UserResource` → `UserResource::make($request->user())`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
+| 3 | Create `app/Actions/Auth/UserLoginAction.php` (`final`, `handle(LoginData $data): User` → `throw_unless(Auth::attempt(['email' => $data->email, 'password' => $data->password]), new AuthenticationException('These credentials do not match our records.'))` → `request()->session()->regenerate()` → `return Auth::user()`) via `make:class`, place under `app/Actions/Auth/`; write `tests/Feature/Auth/UserLoginActionTest.php` (TC-18, TC-19) | The file and its test exist; Pint + PHPStan clean; `pest tests/Feature/Auth/UserLoginActionTest.php` green (TC-18, TC-19). |
+| 4 | Create `app/Http/Controllers/Auth/LoginController.php` (`final`, `__invoke(LoginRequest $request, UserLoginAction $action): UserResource` → `return UserResource::make($action->handle(LoginData::from($request->validated())))` — a bare Resource for the plain `200`, as in `CLAUDE.md`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean; the return type is `UserResource` (no `->response()` / status override). |
+| 5 | Create `app/Actions/Auth/UserLogoutAction.php` (`final`, `handle(): void` → `Auth::guard('web')->logout()` → `request()->session()->invalidate()` → `request()->session()->regenerateToken()`) via `make:class`; write `tests/Feature/Auth/UserLogoutActionTest.php` (TC-20) | The file and its test exist; Pint + PHPStan clean; `pest tests/Feature/Auth/UserLogoutActionTest.php` green (TC-20). |
+| 6 | Create `app/Http/Controllers/Auth/LogoutController.php` (`final`, `__invoke(Request $request, UserLogoutAction $action): Response` → `$action->handle()` → `return response()->noContent()`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
+| 7 | Create `app/Http/Controllers/Auth/CurrentUserController.php` (`final`, `__invoke(Request $request): UserResource` → `return UserResource::make($request->user())`) via `make:controller --invokable`, move and fix the namespace | The file exists; Pint + PHPStan clean. |
 | 8 | Wire `routes/api.php`: add `Route::post('login', LoginController::class)->middleware('throttle:6,1')->name('auth.login')` (with the public-route comment) and `Route::middleware('auth:sanctum')->group(function () { Route::post('logout', LogoutController::class)->name('auth.logout'); Route::get('user', CurrentUserController::class)->name('auth.user'); })`; add the three `use` imports | `php artisan route:list` shows `POST api/v1/login` (`throttle:6,1`), `POST api/v1/logout` and `GET api/v1/user` (both `auth:sanctum`); PHPStan clean in `routes/`. |
 | 9 | Write `tests/Feature/Auth/LoginTest.php` covering TC-1 … TC-12 (`beforeEach` sets `withHeader('Origin', config('app.url'))`) | `pest tests/Feature/Auth/LoginTest.php` all green; each of TC-1…TC-12 has a corresponding test. |
 | 10 | Write `tests/Feature/Auth/LogoutTest.php` covering TC-13 … TC-15 | `pest tests/Feature/Auth/LogoutTest.php` all green; TC-13…TC-15 each have a test. |
 | 11 | Write `tests/Feature/Auth/CurrentUserTest.php` covering TC-16 … TC-17 | `pest tests/Feature/Auth/CurrentUserTest.php` all green. |
-| 12 | Write `tests/Feature/Auth/UserLoginActionTest.php` (TC-18, TC-19) and `tests/Feature/Auth/UserLogoutActionTest.php` (TC-20) | Both files green. |
-| 13 | Enable `config/scramble.php` `security_strategy` = `[MiddlewareAuthSecurityStrategy::class, ['middleware' => ['auth:sanctum'], 'scheme' => <cookie apiKey scheme>]]`; confirm the `SecurityScheme` factory against the installed `dedoc/scramble` version | `GET /docs/api.json` still generates; `/api/v1/logout` and `/api/v1/user` carry a non-empty `security` with a cookie scheme; `/api/v1/login` and `/api/v1/register` have `security: []`. PHPStan clean in `config/`. |
-| 14 | Run the full check in the one-off container: Pint `--test` on `app routes config`, then PHPStan level 6, then the whole Pest suite | All three green; the existing `tests/Feature/ArchTest.php` passes with the new classes in place (TC-21); `RegisterTest` and `ExampleTest` still pass (no regression). |
-| 15 | Manual `curl` against `http://localhost:8000`: `GET /sanctum/csrf-cookie` → `POST /api/v1/login` `200` + `Set-Cookie` → `GET /api/v1/user` `200` → `POST /api/v1/logout` `204` → `GET /api/v1/user` `401`; bad password → `401` with the generic message. Review `GET /docs/api`. | The `curl` sequence returns the codes above; `login` / `logout` / `user` appear in Scramble with request/response inferred from `LoginRequest` and `UserResource`, and the cookie security scheme shows on the two protected routes. |
+| 12 | Enable `config/scramble.php` `security_strategy` = `[MiddlewareAuthSecurityStrategy::class, ['middleware' => ['auth:sanctum'], 'scheme' => <cookie apiKey scheme>]]`; confirm the `SecurityScheme` factory against the installed `dedoc/scramble` version; write `tests/Feature/Auth/DocsSecurityTest.php` (TC-21) | PHPStan clean in `config/`; `pest tests/Feature/Auth/DocsSecurityTest.php` green — `/api/v1/logout` and `/api/v1/user` carry a non-empty `security` referencing the cookie `apiKey` scheme, `/api/v1/login` and `/api/v1/register` have `security: []`, and the single `securitySchemes` entry is `type: apiKey`, `in: cookie`. |
+| 13 | Run the full check in the one-off container: Pint `--test` on `app routes config`, then PHPStan level 6, then the whole Pest suite | All three green; the existing `tests/Feature/ArchTest.php` passes with the new classes in place; `RegisterTest` and `ExampleTest` still pass (no regression). |
+| 14 | Manual `curl` against `http://localhost:8000`: `GET /sanctum/csrf-cookie` → `POST /api/v1/login` `200` + `Set-Cookie` → `GET /api/v1/user` `200` → `POST /api/v1/logout` `204` → `GET /api/v1/user` `401`; bad password → `401` with the generic message. Review `GET /docs/api`. | The `curl` sequence returns the codes above; `login` / `logout` / `user` appear in Scramble with request/response inferred from `LoginRequest` and `UserResource`, and the cookie security scheme shows on the two protected routes. |
 
 *Process note: branch `feature/login-logout` off `main`; branch name, commit
 messages and PR text follow `CLAUDE.md` / `AGENTS.md` — English only, **no**
