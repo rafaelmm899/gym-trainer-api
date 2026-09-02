@@ -2,6 +2,7 @@
 
 namespace App\Exceptions;
 
+use App\Enums\Shared\ErrorCode;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -15,7 +16,7 @@ use Symfony\Component\HttpFoundation\Response;
  */
 abstract class DomainException extends RuntimeException
 {
-    protected string $errorCode = 'DOMAIN_EXCEPTION';
+    protected string $errorCode = ErrorCode::Domain->value;
 
     protected int $statusCode = Response::HTTP_CONFLICT;
 

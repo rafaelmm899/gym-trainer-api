@@ -2,6 +2,7 @@
 
 namespace App\Exceptions;
 
+use App\Enums\Shared\ErrorCode;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -25,51 +26,37 @@ use Throwable;
  */
 final class ApiExceptionRenderer
 {
-    /**
-     * HTTP status => error `code`, for any `HttpExceptionInterface` that no
-     * earlier branch claimed (a bare `abort($status)` included).
-     *
-     * @var array<int, string>
-     */
-    private const HTTP_STATUS_CODES = [
-        Response::HTTP_FORBIDDEN => 'AUTHORIZATION_EXCEPTION',
-        Response::HTTP_NOT_FOUND => 'NOT_FOUND_EXCEPTION',
-        Response::HTTP_METHOD_NOT_ALLOWED => 'METHOD_NOT_ALLOWED_EXCEPTION',
-        419 => 'CSRF_TOKEN_MISMATCH',
-        Response::HTTP_TOO_MANY_REQUESTS => 'RATE_LIMIT_EXCEPTION',
-    ];
-
     public function render(Throwable $e): JsonResponse
     {
         return match (true) {
             $e instanceof ValidationException => $this->envelope(
-                'VALIDATION_EXCEPTION',
+                ErrorCode::Validation,
                 $e->getMessage(),
                 $e->status,
                 ['errors' => $e->errors()],
             ),
             $e instanceof AuthenticationException => $this->envelope(
-                'AUTHENTICATION_EXCEPTION',
+                ErrorCode::Authentication,
                 $e->getMessage(),
                 Response::HTTP_UNAUTHORIZED,
             ),
             $e instanceof AuthorizationException => $this->envelope(
-                'AUTHORIZATION_EXCEPTION',
+                ErrorCode::Authorization,
                 $e->getMessage() ?: 'This action is unauthorized.',
                 Response::HTTP_FORBIDDEN,
             ),
             $e instanceof ModelNotFoundException => $this->envelope(
-                'NOT_FOUND_EXCEPTION',
+                ErrorCode::NotFound,
                 'Resource not found.',
                 Response::HTTP_NOT_FOUND,
             ),
             $e instanceof TokenMismatchException => $this->envelope(
-                'CSRF_TOKEN_MISMATCH',
+                ErrorCode::CsrfTokenMismatch,
                 $e->getMessage() ?: 'CSRF token mismatch.',
                 419,
             ),
             $e instanceof ThrottleRequestsException => $this->envelope(
-                'RATE_LIMIT_EXCEPTION',
+                ErrorCode::RateLimit,
                 $e->getMessage() ?: 'Too many requests.',
                 Response::HTTP_TOO_MANY_REQUESTS,
                 headers: $e->getHeaders(),
@@ -93,7 +80,7 @@ final class ApiExceptionRenderer
             : ($e->getMessage() ?: 'HTTP error.');
 
         return $this->envelope(
-            self::HTTP_STATUS_CODES[$status] ?? 'HTTP_EXCEPTION',
+            ErrorCode::fromHttpStatus($status),
             $message,
             $status,
             headers: $e->getHeaders(),
@@ -103,11 +90,11 @@ final class ApiExceptionRenderer
     private function fromUnhandled(Throwable $e): JsonResponse
     {
         if (! (bool) config('app.debug')) {
-            return $this->envelope('SERVER_EXCEPTION', 'Server error.', Response::HTTP_INTERNAL_SERVER_ERROR);
+            return $this->envelope(ErrorCode::Server, 'Server error.', Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
         return $this->envelope(
-            'SERVER_EXCEPTION',
+            ErrorCode::Server,
             $e->getMessage(),
             Response::HTTP_INTERNAL_SERVER_ERROR,
             [
@@ -126,10 +113,13 @@ final class ApiExceptionRenderer
      * @param  array<string, mixed>  $extra
      * @param  array<string, string>  $headers
      */
-    private function envelope(string $code, string $message, int $status, array $extra = [], array $headers = []): JsonResponse
+    private function envelope(ErrorCode|string $code, string $message, int $status, array $extra = [], array $headers = []): JsonResponse
     {
         return new JsonResponse(
-            ['data' => array_merge(['code' => $code, 'message' => $message], $extra)],
+            ['data' => array_merge([
+                'code' => $code instanceof ErrorCode ? $code->value : $code,
+                'message' => $message,
+            ], $extra)],
             $status,
             $headers,
         );
