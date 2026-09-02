@@ -236,7 +236,7 @@ No change to `config/auth.php`, `config/sanctum.php`, `config/cors.php`,
 | Enums | `app/Enums/` does not exist. | `App\Enums\Profile\ExperienceLevel` and `App\Enums\Shared\Goal` — first backed enums, matching `docs/plans/data-model.md` §Enums. |
 | `User` model | No relations. | `athleteProfile(): HasOne` relation + `@property-read` PHPDoc line. |
 | OpenAPI auth docs | `config/scramble.php` `security_strategy => null`; every route documented as unsecured. | `MiddlewareAuthSecurityStrategy` (apiKey/cookie): `/api/v1/profile` documented as secured, `/api/v1/register` explicitly `security: []`. |
-| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test), `tests/Unit/Profile/` (DTO + Policy), `tests/Feature/Docs/ApiDocsSecurityTest.php`, one added `tests/Feature/ArchTest.php` rule. |
+| Profile-touching tests | None. | `tests/Feature/Profile/` (two endpoint files + the action test + the DTO test), `tests/Unit/Profile/` (Policy), `tests/Feature/Docs/ApiDocsSecurityTest.php`, one added `tests/Feature/ArchTest.php` rule. |
 
 ---
 
@@ -249,13 +249,15 @@ Every feature test's `beforeEach` sets
 `experience_level` = `"intermediate"`, `days_per_week` = `4`,
 `session_minutes` = `60`, `goal` = `"hypertrophy"`, `notes` = `"bad left knee"`.
 
-TC-23, TC-24 and TC-25 are white-box unit tests on the Action, DTO and Policy;
-the HTTP behaviour they touch is already covered end to end by TC-1 … TC-22.
-TC-24 and TC-25 must not hit the database — TC-24 builds from a plain array and
-TC-25 from in-memory model instances — so they run in the `Unit` suite (which has
-no `RefreshDatabase`), the same way `RegisterRequestTest` stays DB-free. TC-23
-does touch the database, so it lives under `tests/Feature/` like
-`UserRegisterActionTest`.
+TC-23, TC-24 and TC-25 are white-box tests on the Action, DTO and Policy; the
+HTTP behaviour they touch is already covered end to end by TC-1 … TC-22. None of
+them asserts against the database. TC-25 (Policy) needs no framework at all —
+in-memory model instances, so it lives in the `Unit` suite (no `RefreshDatabase`),
+the way `RegisterRequestTest` stays DB-free. TC-23 (Action) writes rows, and
+TC-24 (`AthleteProfileData::from()`) needs the container resolved for
+`spatie/laravel-data`, so both live under `tests/Feature/` (like
+`UserRegisterActionTest`); the `Feature` suite's `RefreshDatabase` is harmless
+overhead for TC-24.
 
 ### PUT `/api/v1/profile` — `tests/Feature/Profile/UpdateAthleteProfileTest.php`
 
@@ -378,7 +380,7 @@ does touch the database, so it lives under `tests/Feature/` like
 - **When:** `app(AthleteProfileUpdateAction::class)->handle($user, $data)` is called, then called again with a changed `daysPerWeek`
 - **Expect:** after the first call `assertDatabaseCount('athlete_profiles', 1)` with `experience_level = 'beginner'` and `days_per_week = 3`, and the return value's `wasRecentlyCreated` is `true`; after the second call the count is still `1`, `days_per_week` is updated, and `wasRecentlyCreated` is `false`
 
-### DTO — `tests/Unit/Profile/AthleteProfileDataTest.php`
+### DTO — `tests/Feature/Profile/AthleteProfileDataTest.php`
 
 **TC-24:** `AthleteProfileData::from()` maps snake_case input and casts enums
 - **Given:** the array `['experience_level' => 'beginner', 'days_per_week' => 3, 'session_minutes' => 45, 'goal' => 'strength']`
@@ -455,7 +457,7 @@ in the same task.
 | 4 | Create `app/Models/AthleteProfile.php`: `#[Fillable([...6 columns])]`, `casts()` (`experience_level` / `goal` enum casts, two `integer` casts), `user(): BelongsTo`; add `athleteProfile(): HasOne` to `app/Models/User.php` | Pint + PHPStan clean; `(new AthleteProfile)->getCasts()` includes the `experience_level` and `goal` enum casts; `(new User)->athleteProfile()` returns a `HasOne`. No factory is used yet. |
 | 5 | Create `database/factories/AthleteProfileFactory.php`: valid random enum via `->randomElement(...::cases())`, `days_per_week` 2–6, `session_minutes` ∈ `[30,45,60,75,90]`, `notes => fake()->optional()->sentence()` | `AthleteProfile::factory()->create()` and `User::factory()->has(AthleteProfile::factory())->create()` each persist one row; `$user->athleteProfile()->exists()` is `false` for a fresh user; Pint + PHPStan clean. |
 | 6 | Run `docker compose exec app php artisan ide-helper:models --write` for `AthleteProfile` + `User`; Pint the two models; hand-check the enum-cast `@property` lines | The PHPDoc blocks list every column/relation; `composer check`'s PHPStan step sees the new `@property` / `@method`; the diff is limited to the two models. |
-| 7 | Create `app/Data/Profile/AthleteProfileData.php` via `make:data`, move into `app/Data/Profile/`, fix the namespace; `#[MapInputName(SnakeCaseMapper::class)]`; `readonly` promoted props `ExperienceLevel $experienceLevel`, `int $daysPerWeek`, `int $sessionMinutes`, `Goal $goal`, `?string $notes = null`. Write `tests/Unit/Profile/AthleteProfileDataTest.php` (TC-24) | `docker compose exec app vendor/bin/pest tests/Unit/Profile/AthleteProfileDataTest.php` green (TC-24 — builds from a plain array, no DB); Pint + PHPStan clean. |
+| 7 | Create `app/Data/Profile/AthleteProfileData.php` via `make:data`, move into `app/Data/Profile/`, fix the namespace; `#[MapInputName(SnakeCaseMapper::class)]`; `readonly` promoted props `ExperienceLevel $experienceLevel`, `int $daysPerWeek`, `int $sessionMinutes`, `Goal $goal`, `?string $notes = null`. Write `tests/Feature/Profile/AthleteProfileDataTest.php` (TC-24) | `docker compose exec app vendor/bin/pest tests/Feature/Profile/AthleteProfileDataTest.php` green (TC-24 — builds from a plain array; no DB assertions, but the `Feature` suite is needed because `spatie/laravel-data` resolves the container); Pint + PHPStan clean. |
 | 8 | Create `app/Policies/AthleteProfilePolicy.php` (`final`, `view` / `create` / `update` per §5.2). Write `tests/Unit/Profile/AthleteProfilePolicyTest.php` (TC-25) | `Gate::getPolicyFor(AthleteProfile::class)` resolves it via auto-discovery; `vendor/bin/pest tests/Unit/Profile/AthleteProfilePolicyTest.php` green (TC-25 — in-memory model instances, no DB); Pint + PHPStan clean. |
 | 9 | Create `app/Http/Requests/Profile/UpdateAthleteProfileRequest.php`: `authorize()` delegating to the Policy (`create` when no row, `update` against the instance, `false` for a `null` user); `rules()` per §2.1; `prepareForValidation()` mapping blank `notes` → `null` | File exists; Pint + PHPStan clean; a unit assertion that `experience_level = 'expert'` fails and a whitespace-only `notes` becomes `null`. |
 | 10 | Create `app/Http/Requests/Profile/ShowAthleteProfileRequest.php`: `rules(): []`; `authorize()` — `null` user → `false`, else `view` (or `true` when no row) | File exists; Pint + PHPStan clean. |

@@ -11,6 +11,10 @@ arch('auth controllers are invokable')
     ->expect('App\Http\Controllers\Auth')
     ->toBeInvokable();
 
+arch('profile controllers are invokable')
+    ->expect('App\Http\Controllers\Profile')
+    ->toBeInvokable();
+
 arch('form requests extend FormRequest')
     ->expect('App\Http\Requests')
     ->toExtend('Illuminate\Foundation\Http\FormRequest');
