@@ -4,8 +4,6 @@ namespace App\Http\Requests\Profile;
 
 use App\Enums\Profile\ExperienceLevel;
 use App\Enums\Shared\Goal;
-use App\Models\AthleteProfile;
-use App\Models\User;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -14,17 +12,11 @@ class UpdateAthleteProfileRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        $user = $this->user();
-
-        if (! $user instanceof User) {
-            return false;
-        }
-
-        $profile = $user->athleteProfile()->first();
-
-        return $profile === null
-            ? $user->can('create', AthleteProfile::class)
-            : $user->can('update', $profile);
+        // `auth:sanctum` already guarantees an authenticated caller, and the
+        // endpoint only ever touches that caller's own profile (no id in the
+        // URL). There is no cross-user path to gate, so no Policy — see the
+        // spec §5.2, the same documented exception as `register`.
+        return true;
     }
 
     /**
