@@ -120,6 +120,7 @@ acción manual.
 | `user_id` | `bigint` FK → `users` | Dueño de la rutina. |
 | `name` | `string` | Etiqueta libre del usuario ("Volumen invierno"). |
 | `goal` | `enum Goal` | Objetivo propio de **esta** rutina, independiente del `goal` del perfil. Alimenta al planificador de ciclos. |
+| `hint` | `text` null | Texto libre opcional para orientar a la IA ("quiero PPL", "full body en casa con mancuernas"). Se pasa al planificador sin procesar, tanto en el primer ciclo como en los siguientes. `null` cuando no se indicó. |
 | `days_per_cycle` | `smallint` (default 5) | Días por ciclo. Fijo en 5 en v1 (el campo existe pero no se expone para editar). |
 | `status` | `enum RoutineStatus` | `active` o `archived`. |
 | `archived_at` | `timestamptz` null | Momento en que se archivó (al activarse otra rutina). `null` mientras está activa. |
@@ -127,7 +128,7 @@ acción manual.
 **Reglas**
 - Índice único parcial: `(user_id) WHERE status = 'active'` → como máximo una
   rutina activa por usuario.
-- En v1 no se edita después de crearla (ni `name` ni `goal`).
+- En v1 no se edita después de crearla (ni `name`, ni `goal`, ni `hint`).
 
 ---
 
