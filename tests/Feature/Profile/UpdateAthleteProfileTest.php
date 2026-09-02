@@ -69,7 +69,7 @@ it('requires every non-optional field', function (string $field) {
 
     $this->actingAs($this->user)->putJson('/api/v1/profile', $payload)
         ->assertStatus(422)
-        ->assertJsonValidationErrors($field);
+        ->assertJsonValidationErrors($field, 'data.errors');
 
     $this->assertDatabaseCount('athlete_profiles', 0);
 })->with(['experience_level', 'days_per_week', 'session_minutes', 'goal']);
@@ -79,7 +79,7 @@ it('rejects an experience_level outside the allowed set', function () {
     $this->actingAs($this->user)
         ->putJson('/api/v1/profile', profilePayload(['experience_level' => 'expert']))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('experience_level');
+        ->assertJsonValidationErrors('experience_level', 'data.errors');
 
     $this->assertDatabaseCount('athlete_profiles', 0);
 });
@@ -89,7 +89,7 @@ it('rejects a goal outside the allowed set', function () {
     $this->actingAs($this->user)
         ->putJson('/api/v1/profile', profilePayload(['goal' => 'powerlifting']))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('goal');
+        ->assertJsonValidationErrors('goal', 'data.errors');
 });
 
 // TC-6
@@ -113,7 +113,7 @@ it('rejects an out-of-range or non-integer days_per_week', function (mixed $valu
     $this->actingAs($this->user)
         ->putJson('/api/v1/profile', profilePayload(['days_per_week' => $value]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('days_per_week');
+        ->assertJsonValidationErrors('days_per_week', 'data.errors');
 
     $this->assertDatabaseCount('athlete_profiles', 0);
 })->with([0, 8, -1, 3.5, 'abc']);
@@ -123,7 +123,7 @@ it('rejects an out-of-range or non-integer session_minutes', function (mixed $va
     $this->actingAs($this->user)
         ->putJson('/api/v1/profile', profilePayload(['session_minutes' => $value]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('session_minutes');
+        ->assertJsonValidationErrors('session_minutes', 'data.errors');
 })->with([9, 241, 0, 'x']);
 
 // TC-10
@@ -160,7 +160,7 @@ it('enforces the notes length boundary', function () {
     $this->actingAs($this->user)
         ->putJson('/api/v1/profile', profilePayload(['notes' => str_repeat('a', 2001)]))
         ->assertStatus(422)
-        ->assertJsonValidationErrors('notes');
+        ->assertJsonValidationErrors('notes', 'data.errors');
 });
 
 // TC-13

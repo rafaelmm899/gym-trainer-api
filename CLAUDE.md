@@ -120,6 +120,42 @@ final class RoutineCreateAction
   `response()->noContent()` (204). Errors are thrown as exceptions and rendered
   by the exception handler — never hand-built JSON.
 
+### Errors — one envelope, always a `code`, always under `data`
+
+Every response body in this API is wrapped in a top-level `data` key — success
+bodies via JSON Resources, errors via `App\Exceptions\ApiExceptionRenderer`
+(wired once through `$exceptions->render()` in `bootstrap/app.php`). Every error
+response under `api/*` (or `expectsJson()`) is:
+
+```json
+{ "data": { "code": "SCREAMING_SNAKE_CASE", "message": "Human-readable sentence." } }
+```
+
+`data.errors` (Laravel's `{field: [msg]}` map) is added **only** for
+`VALIDATION_EXCEPTION`. The renderer is the one place raw error JSON is built.
+In tests, assert with `assertJsonPath('data.code', …)` and
+`assertJsonValidationErrors([...], 'data.errors')`.
+
+| Trigger | `code` | HTTP |
+|---|---|---|
+| `ValidationException` | `VALIDATION_EXCEPTION` | 422 |
+| `AuthenticationException` | `AUTHENTICATION_EXCEPTION` | 401 |
+| `AuthorizationException` / `AccessDeniedHttpException` | `AUTHORIZATION_EXCEPTION` | 403 |
+| `ModelNotFoundException` / `NotFoundHttpException` | `NOT_FOUND_EXCEPTION` | 404 |
+| `MethodNotAllowedHttpException` | `METHOD_NOT_ALLOWED_EXCEPTION` | 405 |
+| `TokenMismatchException` | `CSRF_TOKEN_MISMATCH` | 419 |
+| `ThrottleRequestsException` | `RATE_LIMIT_EXCEPTION` | 429 |
+| any other `HttpExceptionInterface` | `HTTP_EXCEPTION` | its status |
+| `App\Exceptions\DomainException` (base) | `DOMAIN_EXCEPTION` | 409 |
+| anything else | `SERVER_EXCEPTION` | 500 — `message` is `"Server error."`; with `app.debug` on it becomes the real message plus `exception`/`file`/`line`/`trace`, still under `data` |
+
+**A business-rule violation is a `DomainException`.** Extend the abstract base in
+`app/Exceptions/{Domain}/`, set `protected string $errorCode` (the specific
+identifier the client branches on, e.g. `ROUTINE_ARCHIVED`), set
+`protected int $statusCode` when 409 is wrong, give it a default message, and
+throw it from a **Service** guard clause:
+`throw_if($routine->isArchived(), new RoutineArchivedException());`
+
 ## Layout — folders by domain
 
 Domains: `Auth`, `Profile`, `Routine`, `Cycle`, `Session`, `Recommendation`,
@@ -135,6 +171,8 @@ app/
   Data/{Domain}/…Data.php            spatie/laravel-data DTOs, typed input across layers
   Jobs/{Domain}/…Job.php
   Enums/{Domain}/…                    or Enums/Shared for cross-domain (Goal)
+  Exceptions/DomainException.php      abstract base; ApiExceptionRenderer sits here too
+  Exceptions/{Domain}/…Exception.php  concrete business-rule violations
   Policies/…Policy.php
   Ai/Agents/{Domain}/…Agent.php       laravel/ai, each wrapped by a Service
   Models/…                            flat, singular: Routine, Cycle, SetLog

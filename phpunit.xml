@@ -35,5 +35,21 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+
+        <!--
+            The Docker `app` service loads `.env` via `env_file`, so CACHE_STORE,
+            SESSION_DRIVER, DB_* and APP_URL reach the CLI as shell env vars — in
+            getenv()/$_ENV, not $_SERVER. Laravel's env() reads $_SERVER first, so
+            the <env> lines above lose to the shell values while these <server>
+            lines fill the untouched $_SERVER slots and win. Keeps the suite on
+            array/sqlite/sync — never the dev Redis/Postgres.
+        -->
+        <server name="APP_ENV" value="testing"/>
+        <server name="APP_URL" value="http://localhost"/>
+        <server name="CACHE_STORE" value="array"/>
+        <server name="SESSION_DRIVER" value="array"/>
+        <server name="QUEUE_CONNECTION" value="sync"/>
+        <server name="DB_CONNECTION" value="sqlite"/>
+        <server name="DB_DATABASE" value=":memory:"/>
     </php>
 </phpunit>

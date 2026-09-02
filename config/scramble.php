@@ -20,7 +20,9 @@ return [
      * Multiple includes or wildcards → server defaults to / and paths stay full (/api/users).
      * Override with `servers`, or use Scramble::registerApi() for separate bases.
      */
-    'api_path' => 'api',
+    'api_path' => [
+        'include' => ['api', 'sanctum/csrf-cookie'],
+    ],
 
     /*
      * Your API domain. By default, app domain is used. This is also a part of the default API routes
