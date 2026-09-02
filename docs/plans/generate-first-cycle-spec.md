@@ -8,12 +8,19 @@
 > `docs/product-context.md` §2 / §4 (steps 2–3) / §5 / §7, `docs/plans/data-model.md`
 > §`cycles` / §`cycle_days` / §`day_exercises` / §`exercises` / §Identificadores /
 > §Enums, `docs/plans/create-routine-spec.md` (the merged story this ticket
-> **reopens**), `docs/plans/domain-exception-handling-spec.md`, and `CLAUDE.md`
-> "The pipeline".
+> **reopens**), `docs/plans/list-routines-spec.md` (merged into `main` after it —
+> made `RoutineResource` a three-endpoint resource and added `tests/Helpers.php`),
+> `docs/plans/domain-exception-handling-spec.md`, and `CLAUDE.md` "The pipeline".
 
 ## 1. Context
 
 **Kind:** Brownfield Feature (extends the merged `POST /api/v1/routines`)
+
+> Branch state: `worktree-generate-first-cycle` is merged up to `origin/main`
+> `6a180de`, which added `GET /api/v1/routines` (list) + `GET /api/v1/routines/{routine}`
+> (detail) — both rendering the shared `RoutineResource` — a `RoutinePolicy::view`
+> ability, and `tests/Helpers.php` (`uuidV4Pattern()` / `iso8601Pattern()`,
+> registered via `composer.json` `autoload-dev.files`). This spec builds on that.
 
 **Stack:** PHP 8.5 · Laravel 13 · PostgreSQL 17 (runtime) / SQLite `:memory:`
 (tests) · Pest 4 (`pest-plugin-laravel`) · `laravel/ai` 0.6.8 (structured-output
@@ -70,7 +77,12 @@ cycle is born `draft` or not at all.
     routine, and calls `CycleDraftService::persist(...)`. Returns the routine with
     `cycle.cycleDays.dayExercises` eager-loaded.
   - `App\Http\Resources\Routine\RoutineResource` — adds a `cycle` key
-    (`CycleResource::make($this->whenLoaded('cycle'))`).
+    (`CycleResource::make($this->whenLoaded('cycle'))`). The Resource is now
+    shared by three endpoints (`POST`, `GET` list, `GET` detail); `whenLoaded`
+    keeps the key absent on the list and detail routes, which do not eager-load
+    the relation. Wiring the nested cycle into `GET /api/v1/routines/{routine}`
+    (`ShowRoutineController`) is **out of scope** — the cycle appears on the
+    `201` create response only.
   - `App\Models\Routine` — adds a `cycle(): HasOne` relation
     (`hasOne(Cycle::class)->ofMany('sequence_number', 'max')`) and `cycles(): HasMany`.
   - `docs/plans/create-routine-spec.md` — updated for the synchronous behaviour,
@@ -82,9 +94,10 @@ cycle is born `draft` or not at all.
 - `App\Jobs\Cycle\GenerateCycleJob` — **kept as a documented stub**, its docblock
   now pointing at the on-demand cycle-N+1 story (Order 150), which remains
   asynchronous. No longer dispatched anywhere.
-- A test AI-fake helper (`fakeCyclePlanner()` + `cyclePlanPayload()`) in
-  `tests/Pest.php`; Pest coverage of every acceptance criterion; new
-  `tests/Feature/ArchTest.php` rules for the new namespaces.
+- A test AI-fake helper (`fakeCyclePlanner()` + `cyclePlanPayload()`) added to
+  the existing `tests/Helpers.php` (registered via `autoload-dev.files`, home of
+  `uuidV4Pattern()` / `iso8601Pattern()`); Pest coverage of every acceptance
+  criterion; new `tests/Feature/ArchTest.php` rules for the new namespaces.
 - `docs/plans/data-model.md` §Enums — mark `CycleStatus` / `MuscleGroup` as
   shipped (drop the "*(a validar)*" / "primera lista" caveats).
 
@@ -280,7 +293,7 @@ No new `.env.example` keys. `phpunit.xml` already sets `DB_CONNECTION=sqlite`,
 |---|---|
 | `docs/plans/create-routine-spec.md` | Rewrite the parts that assumed an async job: §1 in/out of scope, §2.1 (nested `cycle` in the response, `502` status), §2.3 (no dispatch), §7, §8 (test list), §9 (drop "Job dispatch position", revise "GenerateCycleJob"), §10 tasks. |
 | `docs/plans/data-model.md` | §Enums — mark `CycleStatus` / `MuscleGroup` shipped. |
-| `tests/Pest.php` | Add `fakeCyclePlanner(array $overrides = [])` + `cyclePlanPayload(array $overrides = [])` global helpers. |
+| `tests/Helpers.php` | Add `fakeCyclePlanner(array $overrides = [])` + `cyclePlanPayload(array $overrides = [])` global helpers, alongside the existing `uuidV4Pattern()` / `iso8601Pattern()`. (Registered via `composer.json` `autoload-dev.files`; no `composer.json` change — the file is already listed.) |
 | `tests/Feature/ArchTest.php` | Add `arch()` rules: `App\Services` final; `App\Ai\Agents` final. (`App\Actions` rule already covers `App\Actions\Cycle` should any land there.) |
 
 No change to `config/ai.php`, `config/queue.php`, `config/data.php`,
@@ -302,7 +315,7 @@ No change to `config/ai.php`, `config/queue.php`, `config/data.php`,
 | AI usage | Installed, unused; no agent classes. | `App\Ai\Agents\Cycle\CyclePlannerAgent` (structured output) wrapped by `CyclePlannerService`; runs in-request; tests fake it. |
 | Exercise catalogue | No table. | `ExerciseCatalogService` slug-normalises AI names, `firstOrCreate`s a shared `exercises` row, reuses on slug match, logs a probable near-duplicate. |
 | Error envelope | `ApiExceptionRenderer` handles `ValidationException` / auth / `DomainException` / … | Unchanged code. A new `DomainException` subclass (`CycleGenerationException`, `502`, `AI_GENERATION_FAILED`) rides the existing `DomainException` branch. |
-| `RoutineResource` | Routine scalar fields only. | Adds `cycle` = `CycleResource::make($this->whenLoaded('cycle'))` (omitted when the relation is not loaded, e.g. the future list endpoint). |
+| `RoutineResource` | Routine scalar fields only. Shared by `POST` + `GET` list + `GET` detail (Order 50, merged). | Adds `cycle` = `CycleResource::make($this->whenLoaded('cycle'))` — present only where the relation is eager-loaded (the `201` from `StoreRoutineController`), absent on the list and detail routes. |
 | `Routine` model | `user()`, (planned) `cycles()`. | `cycles(): HasMany` + `cycle(): HasOne` (`ofMany('sequence_number', 'max')`) + PHPDoc. |
 | Tests | `StoreRoutineTest` (18), `RoutineCreateActionTest`, `RoutineDataTest`, `RoutinePolicyTest`; `Bus::fake()` used for the job. | `StoreRoutineTest` / `RoutineCreateActionTest` reworked (planner fake, nested-cycle + `502` cases, no `Bus`). New: `tests/Feature/Cycle/CyclePlannerServiceTest.php`, `CycleDraftServiceTest.php`, `tests/Feature/Exercise/ExerciseCatalogServiceTest.php`; `ArchTest` rules. |
 
@@ -315,7 +328,9 @@ Every feature test's `beforeEach` sets `$this->withHeader('Origin', config('app.
 and calls `fakeCyclePlanner()` (so no test hits a real provider); authenticated
 cases add `$this->user = User::factory()->create()` and, unless the case is about
 the missing-profile path, `AthleteProfile::factory()->for($this->user)->create()`.
-Helpers in `tests/Pest.php`:
+UUID / date shapes are asserted with the existing `uuidV4Pattern()` /
+`iso8601Pattern()`. New helpers added to `tests/Helpers.php` (already registered
+via `autoload-dev.files`):
 
 ```php
 function cyclePlanPayload(array $overrides = []): array
@@ -429,7 +444,7 @@ function fakeCyclePlanner(array $overrides = []): void
 **TC-16:** Response exposes uuids, never internal PKs (AC #3)
 - **Given:** a user with a profile; `fakeCyclePlanner()`
 - **When:** `POST /api/v1/routines`
-- **Expect:** `data.id`, `data.cycle.id`, every `data.cycle.days[].id` and `data.cycle.days[].exercises[].id` match the UUID regex; `assertJsonMissingPath('data.cycle.routine_id')`; `assertJsonMissingPath('data.cycle.days.0.cycle_id')`
+- **Expect:** `data.id`, `data.cycle.id`, every `data.cycle.days[].id` and `data.cycle.days[].exercises[].id` match `uuidV4Pattern()`; `assertJsonMissingPath('data.cycle.routine_id')`; `assertJsonMissingPath('data.cycle.days.0.cycle_id')`
 
 **TC-17:** Cross-user isolation — a create never touches another user's routine/cycle
 - **Given:** `$other` with a profile and `Routine::factory()->for($other)->create()` (active); `actingAs($this->user)` (also with a profile); `fakeCyclePlanner()`
@@ -550,7 +565,7 @@ function fakeCyclePlanner(array $overrides = []): void
 | Reopening create-routine | `RoutineCreateAction`, `RoutineResource`, `Routine` model, `create-routine-spec.md` and the routine test files are modified in **this** PR. | The synchronous first cycle is inseparable from routine creation now; there is no clean seam to add it elsewhere. Confirmed with the product owner. |
 | `RoutineCreateAction` return | Returns the `Routine` with `cycle.cycleDays.dayExercises` eager-loaded (via `->load(...)` after `persist()` inside the transaction, or `loadMissing` after). | `Model::shouldBeStrict()` makes a lazy load in the Resource throw. The controller stays 3 lines; the Action owns what the Resource needs. |
 | Nested response depth | The `201` embeds the **full** cycle: `cycle` → `days[]` → `exercises[]` with every prescription field + rationales. New `CycleResource` / `CycleDayResource` / `DayExerciseResource`. | Confirmed with the product owner ("ciclo completo anidado"). Matches the rewritten AC #3. Order 80 ("Ver el detalle de un ciclo") is reduced to a `GET` route + Policy + route-model binding that reuse these Resources. |
-| `RoutineResource.cycle` | `'cycle' => CycleResource::make($this->whenLoaded('cycle'))` — the key is absent when the relation is not loaded. `Routine::cycle(): HasOne` = `hasOne(Cycle::class)->ofMany('sequence_number', 'max')`. | `whenLoaded` keeps the future `GET /api/v1/routines` list endpoint (Order 50) free to not load cycles. `ofMany(..., 'max')` returns "the current cycle" and is forward-compatible with cycle N+1. |
+| `RoutineResource.cycle` | `'cycle' => CycleResource::make($this->whenLoaded('cycle'))` — absent when the relation is not loaded. `Routine::cycle(): HasOne` = `hasOne(Cycle::class)->ofMany('sequence_number', 'max')`. Only `StoreRoutineController`'s `201` eager-loads it (via the Action); `ListRoutinesController` and `ShowRoutineController` (Order 50, merged) are untouched and keep rendering the routine alone. | `whenLoaded` lets one Resource serve three endpoints without the list/detail routes paying for a cycle load. `ofMany(..., 'max')` returns "the current cycle" and is forward-compatible with cycle N+1. Adding the nested cycle to `GET /api/v1/routines/{routine}` is a later story's call, not this one's. |
 | Layer split: planner vs draft | `CyclePlannerService` (AI wrapper: prompt → agent → validate → **pure DTO**, no DB) and `CycleDraftService` (DTO + `Routine` → rows, **no transaction**). The Action wires them and owns the transaction. | `CLAUDE.md`: a Service does one piece of work and never opens transactions/dispatches. The planner must run before the transaction and must not persist; the draft mapping (DTO → `cycle_days`/`day_exercises` + `ExerciseCatalogService` calls) is a cohesive unit reused by Order 150 later. Two focused Services beat one Service with a mode flag or a long inline block in the Action. |
 | `CyclePlannerService` signature | `planFirstCycle(AthleteProfile $profile, Goal $goal, ?string $hint): CyclePlanData`. Not `planFirstCycle(Routine)`. | At planning time the routine does not exist yet (it is only inserted if planning succeeds). Passing the profile + goal + hint is the honest input set. |
 | Shape validation location | In `CyclePlannerService`, after the agent returns: exactly 5 days; each day 1–8 exercises; `rep_min ≤ rep_max`; `sets ≥ 1`; `rest_seconds ≥ 0`; `target_weight_kg` present and `≥ 0`; every `focus_muscle_groups` entry a `MuscleGroup`. Any violation → `CycleGenerationException`. | The structured-output JSON schema constrains a well-behaved provider; the explicit check defends against a bad provider **and** malformed test fakes, and is the single place the "unusable plan → 502" rule lives. Keeps `CycleDraftService` and the Action dealing only in valid DTOs. |
@@ -566,7 +581,7 @@ function fakeCyclePlanner(array $overrides = []): void
 | Factories | `ExerciseFactory` (`slug` from `name`, `created_by_ai = true`); `CycleFactory` (`routine_id` => `Routine::factory()`, `sequence_number = 1`, `status = Draft`, `generated_at = now()`) + states `generating()`, `active()`, `completed()`, `failed()`; `CycleDayFactory`, `DayExerciseFactory` for direct unit use. | Standard pattern (mirrors `RoutineFactory::archived()`). States cover every `CycleStatus` later stories need. |
 | Enum storage | Backed **string** enums; DB columns `string`, no native PG `enum` / `CHECK`. | Portable across PostgreSQL 17 and SQLite `:memory:`; the cast + the planner-service check + the JSON schema enforce membership. Matches `routines` / `athlete_profiles`. |
 | `focus_muscle_groups` column | `$table->json(...)` + `'array'` cast, not `jsonb`. | Portable; identical behaviour for whole-array replace. `data-model.md` deviation noted. |
-| Test strategy for the agent | `CyclePlannerAgent::fake([$structuredArray])` (happy path); `CyclePlannerAgent::fake(fn () => throw ...)` (failure); `CyclePlannerAgent::assertPrompted(...)` / `assertNeverPrompted()` (AC #2-new / guard ordering). `fakeCyclePlanner()` + `cyclePlanPayload()` in `tests/Pest.php`. The endpoint / Action is invoked normally; no `queue:work`. | `CLAUDE.md` "Jobs & AI" ("the suite never hits a real provider"). `laravel/ai`'s `FakeTextGateway` marshals an array into a `StructuredAgentResponse` and a throwing closure to propagate an exception — the two paths the ACs need. |
+| Test strategy for the agent | `CyclePlannerAgent::fake([$structuredArray])` (happy path); `CyclePlannerAgent::fake(fn () => throw ...)` (failure); `CyclePlannerAgent::assertPrompted(...)` / `assertNeverPrompted()` (AC #2-new / guard ordering). `fakeCyclePlanner()` + `cyclePlanPayload()` in `tests/Helpers.php` (next to `uuidV4Pattern()` / `iso8601Pattern()`, the project's established home for shared test helpers). The endpoint / Action is invoked normally; no `queue:work`. | `CLAUDE.md` "Jobs & AI" ("the suite never hits a real provider"). `laravel/ai`'s `FakeTextGateway` marshals an array into a `StructuredAgentResponse` and a throwing closure to propagate an exception — the two paths the ACs need. |
 | Migration / DB isolation | Four migrations on a `-T gym_trainer` clone `gym_trainer_generate_first_cycle`; `.env` `DB_DATABASE` repointed in the worktree, reverted on merge. Pest stays SQLite `:memory:`. | `CLAUDE.md` "Workflows — database isolation". |
 | Scramble docs | The `201` response shape changes (nested `cycle`) and a `502` is added; `dedoc/scramble` infers both from `RoutineResource` / `CycleResource` return types and the thrown `CycleGenerationException`. No `#[...]` attribute needed. `DocsSecurityTest` still passes (auth unchanged). | `CLAUDE.md` "API documentation" — keeping the pipeline typed is the docs. |
 | Git artifacts | Branch `worktree-generate-first-cycle` (the worktree's branch, matching the `worktree-*` precedent); English only; **no** `Co-Authored-By: Claude` / `Claude-Session:` commit trailers (repo `CLAUDE.md` / `AGENTS.md`, which take precedence over the session attribution instruction); single PR; PR description carries only the `🤖 Generated with Claude Code` footer. | Repo `CLAUDE.md` / `AGENTS.md` "Git" rules; every prior spec notes the precedence. |
@@ -595,13 +610,13 @@ toolchain (`worktree-docker-tooling` memo).
 | 9 | Create `app/Exceptions/Cycle/CycleGenerationException.php` (`final extends App\Exceptions\DomainException`; `$errorCode = 'AI_GENERATION_FAILED'`; `$statusCode = 502`; ctor sets the default message, accepts an optional `?Throwable $previous`). | `(new CycleGenerationException)->errorCode() === 'AI_GENERATION_FAILED'` and `->statusCode() === 502`; Pint + PHPStan clean. |
 | 10 | Create `app/Ai/Agents/Cycle/CyclePlannerAgent.php` per §9 (`#[UseCheapestModel]`, `#[Timeout(60)]`, `instructions()`, `schema()` with bounds + `MuscleGroup` enum). | Pint + PHPStan clean; `CyclePlannerAgent::fake([...]); CyclePlannerAgent::make()->prompt('x')->toArray()` returns the fake payload. |
 | 11 | Create `app/Services/Exercise/ExerciseCatalogService.php` (`final`, `resolve()` per §9). Write `tests/Feature/Exercise/ExerciseCatalogServiceTest.php` (TC-30…TC-34). | `vendor/bin/pest tests/Feature/Exercise/ExerciseCatalogServiceTest.php` green; Pint + PHPStan clean. |
-| 12 | Create `app/Services/Cycle/CyclePlannerService.php` (`final`; `planFirstCycle(AthleteProfile, Goal, ?string): CyclePlanData` — build prompt, `CyclePlannerAgent::make()->prompt()`, validate shape, map to DTOs, wrap any failure in `CycleGenerationException`). Add `fakeCyclePlanner()` / `cyclePlanPayload()` to `tests/Pest.php`. Write `tests/Feature/Cycle/CyclePlannerServiceTest.php` (TC-24…TC-27). | `vendor/bin/pest tests/Feature/Cycle/CyclePlannerServiceTest.php` green (incl. the malformed-shape dataset); Pint + PHPStan clean. |
+| 12 | Create `app/Services/Cycle/CyclePlannerService.php` (`final`; `planFirstCycle(AthleteProfile, Goal, ?string): CyclePlanData` — build prompt, `CyclePlannerAgent::make()->prompt()`, validate shape, map to DTOs, wrap any failure in `CycleGenerationException`). Add `fakeCyclePlanner()` / `cyclePlanPayload()` to `tests/Helpers.php`. Write `tests/Feature/Cycle/CyclePlannerServiceTest.php` (TC-24…TC-27). | `vendor/bin/pest tests/Feature/Cycle/CyclePlannerServiceTest.php` green (incl. the malformed-shape dataset); Pint + PHPStan clean. |
 | 13 | Create `app/Services/Cycle/CycleDraftService.php` (`final`, ctor promotes `ExerciseCatalogService`; `persist(Routine, CyclePlanData): Cycle` — create the `cycles` row `draft` + `generated_at` + `split_rationale`, the 5 `cycle_days`, the `day_exercises` via `resolve()`; **no** transaction). Write `tests/Feature/Cycle/CycleDraftServiceTest.php` (TC-28, TC-29). | `vendor/bin/pest tests/Feature/Cycle/CycleDraftServiceTest.php` green; Pint + PHPStan clean. |
 | 14 | Create `app/Http/Resources/Cycle/DayExerciseResource.php`, `CycleDayResource.php` (`exercises` via `whenLoaded('dayExercises')` + nested `DayExerciseResource::collection`), `CycleResource.php` (`days` via `whenLoaded('cycleDays')`); `id` = `uuid`, enums via `->value`, decimals as numbers, dates ISO-8601; no internal ids, no back-relations. | Pint + PHPStan clean; `CycleResource` `toArray()` has no `routine_id` / `cycle_id`, `id` is the `uuid`. |
 | 15 | Rework `app/Actions/Routine/RoutineCreateAction.php`: ctor promotes `CyclePlannerService` + `CycleDraftService`; `handle(User, RoutineData): Routine` = onboarding guard → `$plan = $planner->planFirstCycle($user->athleteProfile, $data->goal, $data->hint)` → `DB::transaction`( scoped archive `update` → `$routine = $user->routines()->create([...Active])` → `$cycleDraftService->persist($routine, $plan)` ) → `$routine->load('cycle.cycleDays.dayExercises')` → return. Remove the `GenerateCycleJob` import + dispatch. | `final` + `handle()`; PHPStan clean; behaviour covered by TC-21…TC-23. |
 | 16 | Update `app/Http/Resources/Routine/RoutineResource.php`: add `'cycle' => CycleResource::make($this->whenLoaded('cycle'))`. | Pint + PHPStan clean; the key is absent when `cycle` is not loaded, present (full tree) when it is. |
 | 17 | Update `app/Jobs/Cycle/GenerateCycleJob.php`: keep the `final implements ShouldQueue` stub; rewrite the docblock to point at the on-demand cycle-N+1 story (Order 150, asynchronous). No dispatch anywhere. | Pint + PHPStan clean; `php artisan queue:work --once` on an empty queue is a no-op; nothing dispatches it. |
-| 18 | Rework `tests/Feature/Routine/StoreRoutineTest.php` (TC-1…TC-20) and `tests/Feature/Routine/RoutineCreateActionTest.php` (TC-21…TC-23): `beforeEach` uses `fakeCyclePlanner()`; drop `Bus::fake()` / `GenerateCycleJob` assertions; add the nested-cycle assertions, the `502` failure cases, the "incumbent not archived on failure" case, and `assertNeverPrompted()` on the `422` / `409` guards. | `vendor/bin/pest tests/Feature/Routine` all green; every TC-1…TC-23 has a matching test. |
+| 18 | Rework `tests/Feature/Routine/StoreRoutineTest.php` (TC-1…TC-20) and `tests/Feature/Routine/RoutineCreateActionTest.php` (TC-21…TC-23). The current `StoreRoutineTest` asserts the async flow (`Bus::fake()`, `Bus::assertDispatched(GenerateCycleJob::class)`, `Bus::assertNothingDispatched()`) and keeps its file-local `routinePayload()` helper: replace `Bus::fake()` with `fakeCyclePlanner()` in `beforeEach`, delete the `Bus`/`GenerateCycleJob` import + assertions, keep `routinePayload()`, keep the `uuidV4Pattern()` / `iso8601Pattern()` usages. Add the nested-cycle assertions, the `502` failure cases, the "incumbent not archived on failure" case, and `CyclePlannerAgent::assertNeverPrompted()` on the `422` / `409` guards. | `vendor/bin/pest tests/Feature/Routine` all green (Store, plus the untouched `ListRoutinesTest` / `ShowRoutineTest` from Order 50); every TC-1…TC-23 has a matching test. |
 | 19 | Update `docs/plans/create-routine-spec.md` for the synchronous behaviour: §1 scope, §2.1 (nested `cycle`, `502`), §2.3 (no dispatch), §7, §8 (revised TC list — cross-reference this spec), §9 (drop "Job dispatch position"; revise "GenerateCycleJob"), §10. | The create-routine spec no longer describes an async job; it points here for the cycle detail. |
 | 20 | Add the arch rules to `tests/Feature/ArchTest.php` (TC-35): `App\Services` final; `App\Ai\Agents` final. | `vendor/bin/pest tests/Feature/ArchTest.php` green; existing rules pass. |
 | 21 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then a final `php artisan ide-helper:models --write` + `vendor/bin/pint app/Models`. | Pint no diffs; PHPStan level 6 clean; model PHPDoc in sync with the migrations. |
