@@ -20,8 +20,8 @@ use Laravel\Ai\Promptable;
  * prompt from the athlete profile + routine goal/hint and validates the result.
  * Runs on the default provider (`config('ai.default')`) and its configured text
  * model (`config('ai.providers.<driver>.models.text.default')`, set from the
- * `ANTHROPIC_MODEL` / `OPENAI_MODEL` env var); the 60 s timeout bounds the worst
- * case for the synchronous create request.
+ * `AI_PROVIDER_MODEL` env var); the 60 s timeout bounds the worst case for the
+ * synchronous create request.
  */
 #[Timeout(60)]
 final class CyclePlannerAgent implements Agent, HasStructuredOutput

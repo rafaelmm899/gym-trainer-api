@@ -56,7 +56,7 @@ return [
             'url' => env('ANTHROPIC_URL', 'https://api.anthropic.com/v1'),
             'models' => [
                 'text' => [
-                    'default' => env('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
+                    'default' => env('AI_PROVIDER_MODEL', 'claude-haiku-4-5-20251001'),
                 ],
             ],
         ],
@@ -129,7 +129,7 @@ return [
             'url' => env('OPENAI_URL', 'https://api.openai.com/v1'),
             'models' => [
                 'text' => [
-                    'default' => env('OPENAI_MODEL', 'gpt-5.4'),
+                    'default' => env('AI_PROVIDER_MODEL', 'gpt-5.4'),
                 ],
             ],
         ],
