@@ -7,12 +7,14 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
 /**
- * Queued from routine creation (and, later, on-demand for cycle N+1).
+ * Placeholder for asynchronous generation of cycle N+1 ("Generar el ciclo
+ * siguiente bajo demanda", backlog Order 150), which will run the planner in a
+ * queued job with its own `generating` → `draft` / `failed` lifecycle and a
+ * progression summary.
  *
- * Placeholder: the AI cycle planner, the `cycles` / `cycle_days` /
- * `day_exercises` schema and the `generating` → `draft` / `failed` lifecycle
- * ship with the "Recibir el primer ciclo apenas creo una rutina" story. This
- * class exists so routine creation has a real job to dispatch and assert on.
+ * The FIRST cycle is generated synchronously inside `RoutineCreateAction` (see
+ * `docs/plans/generate-first-cycle-spec.md`), so nothing dispatches this job
+ * yet. It stays here as the seam for that later story.
  */
 final class GenerateCycleJob implements ShouldQueue
 {

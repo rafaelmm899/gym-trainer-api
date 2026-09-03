@@ -1,5 +1,19 @@
 # Create a routine — `POST /api/v1/routines`
 
+> **Partially superseded by `docs/plans/generate-first-cycle-spec.md` (Order 60).**
+> That story changed first-cycle generation from a queued `GenerateCycleJob`
+> (dispatched inside `RoutineCreateAction`'s transaction, as described below) to a
+> **synchronous, all-or-nothing** step: `RoutineCreateAction` now calls
+> `CyclePlannerService` *before* its transaction and, on success, persists the
+> routine **and** its first `draft` cycle together; the `201` body carries the
+> nested `cycle`; a planner failure returns `502 AI_GENERATION_FAILED` and writes
+> nothing (no routine row, incumbent not archived). `GenerateCycleJob` is kept as
+> a stub for the async cycle N+1 story. Where this document and
+> `generate-first-cycle-spec.md` disagree about the job, the response body, or the
+> `502` path, the latter wins. Everything else here (the `routines` table, the
+> `Routine` model, `RoutineStatus`, `HasPublicUuid`, `ProfileIncompleteException`,
+> `RoutinePolicy`, validation, permanent archival) still holds.
+
 > Derived from the Notion ticket "Crear una rutina nueva" (Feature: Rutinas ·
 > MVP · Must · Repo: API · Order 40) and the approved plan
 > (`.claude/plans/tenemos-un-nuevo-requerimiento-staged-sutton.md`). Base
