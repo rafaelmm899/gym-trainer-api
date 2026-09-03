@@ -20,9 +20,10 @@ class CycleFactory extends Factory
         return [
             'routine_id' => Routine::factory(),
             'sequence_number' => 1,
-            'status' => CycleStatus::Draft,
+            'status' => CycleStatus::Active,
             'split_rationale' => fake()->paragraph(),
             'generated_at' => now(),
+            'activated_at' => now(),
         ];
     }
 
@@ -32,6 +33,15 @@ class CycleFactory extends Factory
             'status' => CycleStatus::Generating,
             'split_rationale' => null,
             'generated_at' => null,
+            'activated_at' => null,
+        ]);
+    }
+
+    public function draft(): static
+    {
+        return $this->state(fn (): array => [
+            'status' => CycleStatus::Draft,
+            'activated_at' => null,
         ]);
     }
 
@@ -40,6 +50,15 @@ class CycleFactory extends Factory
         return $this->state(fn (): array => [
             'status' => CycleStatus::Active,
             'activated_at' => now(),
+        ]);
+    }
+
+    public function incomplete(): static
+    {
+        return $this->state(fn (): array => [
+            'status' => CycleStatus::Incomplete,
+            'activated_at' => now()->subWeek(),
+            'completed_at' => now(),
         ]);
     }
 

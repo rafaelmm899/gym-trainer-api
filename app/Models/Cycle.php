@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One week of a routine: its place in the sequence, its lifecycle state, and the
- * AI's rationale for the split. The synchronous first cycle is born `draft`.
+ * AI's rationale for the split. The synchronous first cycle is born `active`.
  *
  * @property int $id
  * @property string $uuid

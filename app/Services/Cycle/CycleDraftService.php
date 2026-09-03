@@ -13,9 +13,10 @@ use App\Services\Exercise\ExerciseCatalogService;
 
 /**
  * Writes a validated {@see CyclePlanData} to the database as the routine's first
- * cycle: a `draft` {@see Cycle}, its {@see CycleDay} rows, and one
+ * cycle: an `active` {@see Cycle}, its {@see CycleDay} rows, and one
  * `day_exercises` row per prescription (each exercise resolved through the
- * catalogue).
+ * catalogue). The first cycle is born `active` — there is no "activate a cycle"
+ * step in the MVP.
  *
  * Opens no transaction — {@see RoutineCreateAction} wraps
  * this call together with the routine insert so the whole create is atomic.
@@ -28,9 +29,10 @@ final class CycleDraftService
     {
         $cycle = $routine->cycles()->create([
             'sequence_number' => 1,
-            'status' => CycleStatus::Draft,
+            'status' => CycleStatus::Active,
             'split_rationale' => $plan->splitRationale,
             'generated_at' => now(),
+            'activated_at' => now(),
         ]);
 
         foreach ($plan->days as $index => $day) {

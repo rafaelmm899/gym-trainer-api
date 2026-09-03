@@ -9,6 +9,7 @@ use App\Http\Controllers\Profile\UpdateAthleteProfileController;
 use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
+use App\Http\Controllers\Session\StoreTrainingSessionController;
 use Illuminate\Support\Facades\Route;
 
 // Public: no auth:sanctum, no Policy — no actor and no resource yet.
@@ -40,4 +41,10 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('routine')
         ->can('view', 'routine')
         ->name('routines.show');
+
+    // Sessions: nested under the routine (bound by uuid). The Form Request
+    // delegates authorization to TrainingSessionPolicy::create.
+    Route::post('routines/{routine}/sessions', StoreTrainingSessionController::class)
+        ->whereUuid('routine')
+        ->name('routines.sessions.store');
 });
