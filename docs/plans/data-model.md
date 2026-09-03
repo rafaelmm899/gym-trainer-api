@@ -143,17 +143,22 @@ devolvió la IA y cuándo ocurrió cada transición.
 | `uuid` | `uuid`, **unique** | Identificador público (route-model binding + campo `id` del Resource). |
 | `routine_id` | `bigint` FK → `routines` | Rutina a la que pertenece. |
 | `sequence_number` | `int` | Número de semana dentro de la rutina: 1, 2, 3… |
-| `status` | `enum CycleStatus` | `generating` (job encolado corriendo) → `draft` (IA terminó, falta activar) → `active` (en curso) → `completed` (llegó el siguiente) / `failed` (el job falló). |
+| `status` | `enum CycleStatus` | **Primer ciclo:** nace `active` (generación síncrona). **Ciclo N+1:** `generating` (job corriendo) → `active` (éxito) / `failed`. Un ciclo pasa a `completed` o `incomplete` al generarse el siguiente (ver Reglas). `draft` queda **reservado** (revisión previa a confirmar) y no se usa en el MVP. |
 | `split_rationale` | `text` null | Explicación de la IA sobre por qué eligió ese reparto de grupos musculares por día. `null` mientras `generating` / `failed`. |
 | `conversation_id` | `string(36)` FK → `agent_conversations` null | Conversación IA que generó el ciclo. Traza / auditoría. |
-| `generated_at` | `timestamptz` null | Cuándo la IA devolvió el ciclo (pasó a `draft`). |
-| `activated_at` | `timestamptz` null | Cuándo el usuario lo activó. |
-| `completed_at` | `timestamptz` null | Cuándo se cerró (al activarse el ciclo N+1). |
+| `generated_at` | `timestamptz` null | Cuándo la IA devolvió el ciclo. |
+| `activated_at` | `timestamptz` null | Cuándo empezó a ser el ciclo en curso (`= created_at` para el primer ciclo; momento del rollover para el N+1). |
+| `completed_at` | `timestamptz` null | Cuándo se cerró: al generarse el ciclo N+1. Se setea junto con `completed` o `incomplete`. |
 
 **Reglas**
 - Único `(routine_id, sequence_number)`.
-- Dentro de una rutina activa: a lo sumo **1 ciclo `active` y 1 `draft`** a la
-  vez (guard en Service, no en la base).
+- A lo sumo **1 ciclo `active`** por rutina (guard en Service, no en la base). En
+  el MVP no hay ciclos `draft`: el primero nace `active` y el N+1 pasa de
+  `generating` a `active` directo.
+- **Rollover** (al generar el ciclo N+1, en una operación atómica): el N+1 nace
+  `active`; el ciclo saliente pasa a `completed` si **todos** sus `cycle_days`
+  tienen ≥1 sesión `completed`, si no a **`incomplete`**. El estado se persiste y
+  no se recalcula si más tarde se registran días atrasados.
 
 ---
 
@@ -281,7 +286,8 @@ que consume la IA se calculan a partir de estas filas.
 ese ejercicio**, acotado a `(usuario, rutina, ejercicio)` — cada rutina lleva
 sus propias recomendaciones. Se genera al cerrar una sesión y se va
 reemplazando: la anterior del mismo ejercicio pasa a `superseded`. Cuando una
-recomendación se usa para generar el ciclo N+1, pasa a `applied`.
+recomendación se usa para generar el ciclo N+1 **y ese ejercicio se entrenó** en
+el ciclo saliente, pasa a `applied`; si no se entrenó, sigue `active`.
 
 | Columna | Tipo | Descripción |
 |---|---|---|
@@ -303,8 +309,11 @@ recomendación se usa para generar el ciclo N+1, pasa a `applied`.
 - Índice único parcial:
   `(user_id, routine_id, exercise_id) WHERE status = 'active'` → una sola
   recomendación vigente por ejercicio y rutina.
-- La generación del ciclo N+1 consume las `active` de la rutina y las marca
-  `applied`.
+- La generación del ciclo N+1 consume las `active` de la rutina, pero solo marca
+  `applied` las de **ejercicios entrenados** en el ciclo saliente. La
+  recomendación de un ejercicio prescrito pero no entrenado (0 series) **sigue
+  `active`** y se reutiliza en la siguiente ronda de planificación → su objetivo
+  se repite tal cual.
 
 ---
 
@@ -314,6 +323,12 @@ El **resumen de progresión** por ejercicio (prescrito vs. real, tendencia de
 peso/reps/RPE, señal de estancamiento) que recibe el planificador de ciclos se
 calcula en PHP a demanda desde `set_logs` + prescripción. No se persiste ni se
 expone como endpoint en v1.
+
+Incluye por ejercicio un flag **`performed`** (`true` / `false`): `false` cuando
+el ejercicio estaba prescrito en el ciclo saliente pero no tiene ninguna serie
+registrada. El planificador, ante `performed: false`, **mantiene el objetivo**
+(`action: hold`, mismos peso/series/reps, `confidence: low`) en vez de progresar
+sin datos.
 
 ---
 
@@ -336,7 +351,7 @@ expone como endpoint en v1.
 | `ExperienceLevel` | `App\Enums\Profile\ExperienceLevel` | `beginner`, `intermediate`, `advanced` |
 | `MuscleGroup` | `App\Enums\Shared\MuscleGroup` | `chest`, `back`, `quads`, `hamstrings`, `glutes`, `shoulders`, `biceps`, `triceps`, `calves`, `core` |
 | `RoutineStatus` | `App\Enums\Routine\RoutineStatus` | `active`, `archived` |
-| `CycleStatus` | `App\Enums\Cycle\CycleStatus` | `generating`, `draft`, `active`, `completed`, `failed` |
+| `CycleStatus` | `App\Enums\Cycle\CycleStatus` | `generating`, `draft`, `active`, `completed`, `incomplete`, `failed` |
 | `SessionStatus` | `App\Enums\Session\SessionStatus` | `in_progress`, `completed` |
 | `AnalysisState` | `App\Enums\Session\AnalysisState` | `pending`, `processing`, `done`, `failed` |
 | `RecommendationAction` | `App\Enums\Recommendation\RecommendationAction` | `advance_weight`, `hold`, `add_reps`, `add_set`, `deload`, `technique_focus` |
