@@ -39,7 +39,8 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
 
             HARD REQUIREMENTS — the response is rejected otherwise:
             - `days` MUST contain EXACTLY 5 entries. Not 3, not 4, not 6 — five.
-            - Every day MUST contain between 3 and 6 entries in `exercises`.
+            - Every day MUST contain the number of `exercises` the prompt asks
+              for — the same count on every day, within the given range.
             - Every exercise MUST set a numeric `target_weight_kg` in KILOGRAMS,
               estimated from the athlete's experience level and notes. Never omit
               it; never use 0 for a loaded lift (a genuine bodyweight move may
@@ -51,6 +52,10 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
               (`primary_muscle_group` may also be null).
 
             Guidance:
+            - Fill the athlete's session — roughly one working exercise per
+              10–15 minutes of session time, within the range the prompt gives.
+            - Prefer 3–4 working sets for the main compound lifts and 2–3 for
+              accessories.
             - Order the 5 days as the athlete should train them; order exercises
               within each day.
             - Respect the athlete's available days per week, session length, goal,
@@ -61,11 +66,11 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
     }
 
     /**
-     * The exact numeric bounds (5 days, 3–6 exercises, rep ranges, RPE 0–10) are
-     * NOT encoded here — strict `json_schema` providers (OpenAI, Groq) reject
-     * `minItems` / `minimum` and demand every property be listed in `required`.
-     * The bounds live in {@see instructions()} and are enforced by
-     * {@see CyclePlannerService}; the schema only fixes the shape and types.
+     * Strict-mode compatible: every object lists all its properties in
+     * `required` (via {@see object()}) and sets `additionalProperties: false`;
+     * a logically-optional field stays required but nullable. The day count is
+     * fixed at 5 here; the exercises-per-day range is athlete-specific and lives
+     * in the prompt + {@see CyclePlannerService} validation, not the schema.
      *
      * @return array<string, Type>
      */
@@ -84,7 +89,7 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
                         ->min(1)
                         ->items($schema->string()->enum(MuscleGroup::values())),
                     'day_rationale' => $schema->string(),
-                    'exercises' => $schema->array()->min(3)->max(6)->items($this->object($schema, [
+                    'exercises' => $schema->array()->items($this->object($schema, [
                         'name' => $schema->string()->description('Exercise name, free text.'),
                         'primary_muscle_group' => $schema->string()->enum(MuscleGroup::values())->nullable()
                             ->description('One of the listed muscle groups, or null.'),

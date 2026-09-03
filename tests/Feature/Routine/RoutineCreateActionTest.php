@@ -32,7 +32,7 @@ it('plans, archives the incumbent, inserts the routine and persists the cycle tr
     $this->assertDatabaseCount('routines', 1);
     $this->assertDatabaseHas('cycles', ['routine_id' => $first->id, 'sequence_number' => 1, 'status' => 'draft']);
     $this->assertDatabaseCount('cycle_days', 5);
-    $this->assertDatabaseCount('day_exercises', 10);
+    $this->assertDatabaseCount('day_exercises', 25);
 
     $second = $action->handle($user, new RoutineData(name: 'Spring Cut', goal: Goal::FatLoss, hint: null));
 

@@ -60,14 +60,17 @@ function cyclePlanPayload(array $overrides = []): array
         'exercises' => $exercises,
     ];
 
+    // 5 days x 5 exercises = 25 slots (5/day is valid for every experience-level
+    // range). "Barbell Bench Press" repeats on days 1 and 5, so distinct
+    // exercise names = 24 (the dedup assertions rely on this).
     return array_replace_recursive([
         'split_rationale' => 'A five-day split that hits each major group once with enough volume for hypertrophy.',
         'days' => [
-            $day('Chest', ['chest', 'triceps'], [$exercise('Barbell Bench Press', 'chest'), $exercise('Incline Dumbbell Press', 'chest')]),
-            $day('Back', ['back', 'biceps'], [$exercise('Barbell Row', 'back'), $exercise('Lat Pulldown', 'back')]),
-            $day('Legs', ['quads', 'glutes'], [$exercise('Back Squat', 'quads'), $exercise('Romanian Deadlift', 'hamstrings')]),
-            $day('Shoulders', ['shoulders'], [$exercise('Overhead Press', 'shoulders'), $exercise('Lateral Raise', 'shoulders')]),
-            $day('Arms', ['biceps', 'triceps'], [$exercise('Barbell Curl', 'biceps'), $exercise('Triceps Pushdown', 'triceps')]),
+            $day('Chest', ['chest', 'triceps'], [$exercise('Barbell Bench Press', 'chest'), $exercise('Incline Dumbbell Press', 'chest'), $exercise('Cable Fly', 'chest'), $exercise('Overhead Triceps Extension', 'triceps'), $exercise('Triceps Pushdown', 'triceps')]),
+            $day('Back', ['back', 'biceps'], [$exercise('Deadlift', 'back'), $exercise('Barbell Row', 'back'), $exercise('Lat Pulldown', 'back'), $exercise('Seated Cable Row', 'back'), $exercise('Barbell Curl', 'biceps')]),
+            $day('Legs', ['quads', 'hamstrings', 'glutes'], [$exercise('Back Squat', 'quads'), $exercise('Romanian Deadlift', 'hamstrings'), $exercise('Leg Press', 'quads'), $exercise('Leg Curl', 'hamstrings'), $exercise('Standing Calf Raise', 'calves')]),
+            $day('Shoulders', ['shoulders'], [$exercise('Overhead Press', 'shoulders'), $exercise('Arnold Press', 'shoulders'), $exercise('Lateral Raise', 'shoulders'), $exercise('Rear Delt Fly', 'shoulders'), $exercise('Face Pull', 'back')]),
+            $day('Arms', ['biceps', 'triceps', 'core'], [$exercise('Barbell Bench Press', 'chest'), $exercise('Close-Grip Bench Press', 'triceps'), $exercise('Preacher Curl', 'biceps'), $exercise('Hammer Curl', 'biceps'), $exercise('Cable Crunch', 'core')]),
         ],
     ], $overrides);
 }
