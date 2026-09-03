@@ -54,6 +54,11 @@ return [
             'driver' => 'anthropic',
             'key' => env('ANTHROPIC_API_KEY'),
             'url' => env('ANTHROPIC_URL', 'https://api.anthropic.com/v1'),
+            'models' => [
+                'text' => [
+                    'default' => env('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
+                ],
+            ],
         ],
 
         'azure' => [
@@ -122,6 +127,11 @@ return [
             'driver' => 'openai',
             'key' => env('OPENAI_API_KEY'),
             'url' => env('OPENAI_URL', 'https://api.openai.com/v1'),
+            'models' => [
+                'text' => [
+                    'default' => env('OPENAI_MODEL', 'gpt-5.4'),
+                ],
+            ],
         ],
 
         'openrouter' => [

@@ -7,7 +7,6 @@ use App\Services\Cycle\CyclePlannerService;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Attributes\Timeout;
-use Laravel\Ai\Attributes\UseCheapestModel;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Promptable;
@@ -19,10 +18,11 @@ use Laravel\Ai\Promptable;
  *
  * Wrapped by {@see CyclePlannerService}, which builds the
  * prompt from the athlete profile + routine goal/hint and validates the result.
- * Runs on the default provider (`config('ai.default')`) with its cheapest model;
- * the 60 s timeout bounds the worst case for the synchronous create request.
+ * Runs on the default provider (`config('ai.default')`) and its configured text
+ * model (`config('ai.providers.<driver>.models.text.default')`, set from the
+ * `ANTHROPIC_MODEL` / `OPENAI_MODEL` env var); the 60 s timeout bounds the worst
+ * case for the synchronous create request.
  */
-#[UseCheapestModel]
 #[Timeout(60)]
 final class CyclePlannerAgent implements Agent, HasStructuredOutput
 {
