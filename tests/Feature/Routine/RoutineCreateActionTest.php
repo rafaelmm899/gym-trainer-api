@@ -30,7 +30,7 @@ it('plans, archives the incumbent, inserts the routine and persists the cycle tr
         ->and($first->cycle->cycleDays->first()->relationLoaded('dayExercises'))->toBeTrue();
 
     $this->assertDatabaseCount('routines', 1);
-    $this->assertDatabaseHas('cycles', ['routine_id' => $first->id, 'sequence_number' => 1, 'status' => 'draft']);
+    $this->assertDatabaseHas('cycles', ['routine_id' => $first->id, 'sequence_number' => 1, 'status' => 'active']);
     $this->assertDatabaseCount('cycle_days', 5);
     $this->assertDatabaseCount('day_exercises', 25);
 
@@ -39,7 +39,7 @@ it('plans, archives the incumbent, inserts the routine and persists the cycle tr
     expect($first->refresh()->status)->toBe(RoutineStatus::Archived)
         ->and($first->archived_at)->not->toBeNull()
         ->and($second->status)->toBe(RoutineStatus::Active)
-        ->and($second->cycle->status)->toBe(CycleStatus::Draft);
+        ->and($second->cycle->status)->toBe(CycleStatus::Active);
 
     $this->assertDatabaseCount('routines', 2);
     $this->assertDatabaseCount('cycles', 2);

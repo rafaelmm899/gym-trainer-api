@@ -31,6 +31,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read Collection<int, Cycle> $cycles
  * @property-read int|null $cycles_count
  * @property-read Cycle|null $cycle
+ * @property-read Collection<int, TrainingSession> $trainingSessions
+ * @property-read int|null $training_sessions_count
  *
  * @method static \Database\Factories\RoutineFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Routine newModelQuery()
@@ -108,5 +110,13 @@ class Routine extends Model
     public function cycle(): HasOne
     {
         return $this->hasOne(Cycle::class)->ofMany('sequence_number', 'max');
+    }
+
+    /**
+     * @return HasMany<TrainingSession, $this>
+     */
+    public function trainingSessions(): HasMany
+    {
+        return $this->hasMany(TrainingSession::class);
     }
 }

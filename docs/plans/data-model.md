@@ -13,7 +13,7 @@
 - **Sin soft deletes** en v1. El historial se conserva por estado
   (`archived` / `completed` / `superseded`), no borrando filas.
 - FKs con `ON DELETE CASCADE` cuando el hijo no tiene sentido sin el padre
-  (`cycles` → `routines`, `set_logs` → `sessions`, …). `exercise_id` **nunca**
+  (`cycles` → `routines`, `set_logs` → `training_sessions`, …). `exercise_id` **nunca**
   cascadea: el catálogo es permanente.
 - Pesos en **kg**, `decimal(6,2)`. RPE `decimal(3,1)` (rango 0–10).
 - Índices únicos parciales de PostgreSQL para los invariantes de "uno activo a
@@ -49,7 +49,7 @@ Así la API no filtra el orden de creación ni el volumen de filas.
   autenticado, nunca por id.
 
 **Llevan `uuid`:** `routines`, `cycles`, `cycle_days`, `day_exercises`,
-`exercises`, `sessions`, `set_logs`, `exercise_recommendations`.
+`exercises`, `training_sessions`, `set_logs`, `exercise_recommendations`.
 
 ## Decisiones tomadas (por defecto, ajustables)
 
@@ -60,7 +60,7 @@ Así la API no filtra el orden de creación ni el volumen de filas.
 | 3 | Reps (prescripción y recomendación) | Rango `rep_min` / `rep_max` |
 | 4 | `confidence` | Enum `low` / `medium` / `high` |
 | 5 | Dedupe de ejercicios | Solo log; sin tabla `exercise_aliases` en v1 |
-| 6 | Prescrito vs. real | Se deriva por `sessions.cycle_day_id`; sin FK extra en `set_logs` |
+| 6 | Prescrito vs. real | Se deriva por `training_sessions.cycle_day_id`; sin FK extra en `set_logs` |
 
 ## Diagrama ER
 
@@ -72,15 +72,15 @@ erDiagram
     cycles ||--o{ cycle_days : contiene
     cycle_days ||--o{ day_exercises : prescribe
     exercises ||--o{ day_exercises : "se usa en"
-    users ||--o{ sessions : ejecuta
-    routines ||--o{ sessions : agrupa
-    cycle_days |o--o{ sessions : planifica
-    sessions ||--o{ set_logs : registra
+    users ||--o{ training_sessions : ejecuta
+    routines ||--o{ training_sessions : agrupa
+    cycle_days |o--o{ training_sessions : planifica
+    training_sessions ||--o{ set_logs : registra
     exercises ||--o{ set_logs : de
     users ||--o{ exercise_recommendations : para
     routines ||--o{ exercise_recommendations : acota
     exercises ||--o{ exercise_recommendations : sobre
-    sessions |o--o{ exercise_recommendations : origina
+    training_sessions |o--o{ exercise_recommendations : origina
 ```
 
 ---
@@ -231,7 +231,10 @@ encasillar a la IA en una lista fija.
 
 ---
 
-## `sessions`
+## `training_sessions`
+
+Tabla `training_sessions`, no `sessions`: Laravel ya reserva `sessions` para su
+session store. El modelo es `App\Models\TrainingSession`.
 
 **Qué almacena:** un día de entrenamiento **realmente ejecutado**. Puede
 corresponder a un día del ciclo (`cycle_day_id` presente) o ser una sesión
@@ -266,7 +269,7 @@ que consume la IA se calculan a partir de estas filas.
 | Columna | Tipo | Descripción |
 |---|---|---|
 | `uuid` | `uuid`, **unique** | Identificador público (route-model binding para editar/borrar la serie + campo `id` del Resource). |
-| `session_id` | `bigint` FK → `sessions` | Sesión a la que pertenece la serie. |
+| `session_id` | `bigint` FK → `training_sessions` | Sesión a la que pertenece la serie. |
 | `exercise_id` | `bigint` FK → `exercises` | Ejercicio de la serie. Va directo (no vía `day_exercises`) para que las sesiones libres, sin prescripción, también registren. |
 | `set_number` | `smallint` | Número de serie dentro del ejercicio en esa sesión: 1, 2, 3… |
 | `weight_kg` | `decimal(6,2)` | Peso levantado. |
@@ -275,7 +278,7 @@ que consume la IA se calculan a partir de estas filas.
 | `note` | `text` null | Nota libre del usuario sobre esa serie. |
 
 **Reglas**
-- Prescrito vs. real: se obtiene uniendo `set_logs` → `sessions.cycle_day_id` →
+- Prescrito vs. real: se obtiene uniendo `set_logs` → `training_sessions.cycle_day_id` →
   `day_exercises` por `exercise_id`. Sin columna puente.
 
 ---
@@ -295,7 +298,7 @@ el ciclo saliente, pasa a `applied`; si no se entrenó, sigue `active`.
 | `user_id` | `bigint` FK → `users` | Dueño. |
 | `routine_id` | `bigint` FK → `routines` | Rutina a la que aplica. El mismo ejercicio en otra rutina tiene su propia recomendación. |
 | `exercise_id` | `bigint` FK → `exercises` | Ejercicio sobre el que aconseja. |
-| `source_session_id` | `bigint` FK → `sessions` null | Sesión cuyo análisis produjo esta recomendación. Traza. |
+| `source_session_id` | `bigint` FK → `training_sessions` null | Sesión cuyo análisis produjo esta recomendación. Traza. |
 | `target_weight_kg` | `decimal(6,2)` | Peso sugerido para la próxima vez. |
 | `target_sets` | `smallint` | Series sugeridas. |
 | `target_rep_min` | `smallint` | Extremo inferior del rango de reps sugerido. |
@@ -339,7 +342,7 @@ sin datos.
 | `users` | Laravel (extendida) | Cuentas de acceso: `name`, `email`, `password`. Auth por Sanctum SPA (cookie + CSRF). Sin `uuid` en v1: la API solo opera sobre el usuario autenticado. |
 | `cache`, `cache_locks` | Laravel | Store de cache (driver Redis en runtime; tabla presente por defecto). |
 | `jobs`, `job_batches`, `failed_jobs` | Laravel | Cola `database` en dev: generación de ciclo y análisis de sesión. |
-| `agent_conversations`, `agent_conversation_messages` | `laravel/ai` | Historial de conversaciones con los agentes de salida estructurada. Referenciadas (opcional) desde `cycles.conversation_id` y `sessions.conversation_id`. |
+| `agent_conversations`, `agent_conversation_messages` | `laravel/ai` | Historial de conversaciones con los agentes de salida estructurada. Referenciadas (opcional) desde `cycles.conversation_id` y `training_sessions.conversation_id`. |
 
 ---
 

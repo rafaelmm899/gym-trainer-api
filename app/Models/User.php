@@ -28,6 +28,8 @@ use Illuminate\Notifications\Notifiable;
  * @property-read AthleteProfile|null $athleteProfile
  * @property-read Collection<int, Routine> $routines
  * @property-read int|null $routines_count
+ * @property-read Collection<int, TrainingSession> $trainingSessions
+ * @property-read int|null $training_sessions_count
  * @property-read DatabaseNotificationCollection<int, DatabaseNotification> $notifications
  * @property-read int|null $notifications_count
  *
@@ -80,5 +82,13 @@ class User extends Authenticatable
     public function routines(): HasMany
     {
         return $this->hasMany(Routine::class);
+    }
+
+    /**
+     * @return HasMany<TrainingSession, $this>
+     */
+    public function trainingSessions(): HasMany
+    {
+        return $this->hasMany(TrainingSession::class);
     }
 }

@@ -37,13 +37,13 @@ beforeEach(function () {
 });
 
 // TC-1
-it('creates the routine active with a nested draft cycle of 5 prescribed days', function () {
+it('creates the routine active with a nested active cycle of 5 prescribed days', function () {
     $response = $this->actingAs($this->user)->postJson('/api/v1/routines', routinePayload());
 
     $response->assertCreated()
         ->assertJsonPath('data.status', 'active')
         ->assertJsonPath('data.days_per_cycle', 5)
-        ->assertJsonPath('data.cycle.status', 'draft')
+        ->assertJsonPath('data.cycle.status', 'active')
         ->assertJsonPath('data.cycle.sequence_number', 1);
 
     expect($response->json('data.cycle.split_rationale'))->toBeString()->not->toBe('')
@@ -68,7 +68,7 @@ it('creates the routine active with a nested draft cycle of 5 prescribed days', 
     $this->assertDatabaseCount('day_exercises', 25);
     $this->assertDatabaseHas('cycles', [
         'sequence_number' => 1,
-        'status' => 'draft',
+        'status' => 'active',
     ]);
 });
 
@@ -235,11 +235,11 @@ it('saves an omitted or blank hint as null and keeps it out of the prompt', func
 ]);
 
 // TC-13
-it('accepts every valid goal value and generates a draft cycle', function (string $goal) {
+it('accepts every valid goal value and generates an active cycle', function (string $goal) {
     $this->actingAs($this->user)->postJson('/api/v1/routines', routinePayload(['goal' => $goal]))
         ->assertCreated()
         ->assertJsonPath('data.goal', $goal)
-        ->assertJsonPath('data.cycle.status', 'draft');
+        ->assertJsonPath('data.cycle.status', 'active');
 })->with(['hypertrophy', 'strength', 'fat_loss', 'general_health', 'endurance']);
 
 // TC-14

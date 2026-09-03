@@ -1,6 +1,11 @@
 <?php
 
 use App\Ai\Agents\Cycle\CyclePlannerAgent;
+use App\Models\Cycle;
+use App\Models\CycleDay;
+use App\Models\DayExercise;
+use App\Models\Routine;
+use App\Models\User;
 
 /*
 |--------------------------------------------------------------------------
@@ -85,4 +90,24 @@ function cyclePlanPayload(array $overrides = []): array
 function fakeCyclePlanner(array $overrides = []): void
 {
     CyclePlannerAgent::fake(fn (): array => cyclePlanPayload($overrides));
+}
+
+/**
+ * An active routine for the user with a real 5-day active cycle, each day
+ * carrying three prescribed exercises — the fixture every training-session
+ * test needs. Returns the routine with `cycle.cycleDays` eager-loaded.
+ */
+function trainingRoutineWithCycle(User $user): Routine
+{
+    $routine = Routine::factory()->for($user)->create();
+    $cycle = Cycle::factory()->active()->for($routine)->create();
+
+    CycleDay::factory()->count(5)->for($cycle)
+        ->sequence(fn ($sequence) => ['order' => $sequence->index + 1])
+        ->create()
+        ->each(fn (CycleDay $day) => DayExercise::factory()->count(3)->for($day)
+            ->sequence(fn ($sequence) => ['order' => $sequence->index + 1])
+            ->create());
+
+    return $routine->load('cycle.cycleDays');
 }

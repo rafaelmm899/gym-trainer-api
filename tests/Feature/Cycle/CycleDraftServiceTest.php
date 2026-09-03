@@ -35,7 +35,8 @@ it('writes the cycle, 5 days and every prescription from a plan DTO', function (
 
     $cycle = DB::transaction(fn () => app(CycleDraftService::class)->persist($routine, $plan));
 
-    expect($cycle->status)->toBe(CycleStatus::Draft)
+    expect($cycle->status)->toBe(CycleStatus::Active)
+        ->and($cycle->activated_at)->not->toBeNull()
         ->and($cycle->sequence_number)->toBe(1)
         ->and($cycle->generated_at)->not->toBeNull()
         ->and($cycle->split_rationale)->toBe($plan->splitRationale);
