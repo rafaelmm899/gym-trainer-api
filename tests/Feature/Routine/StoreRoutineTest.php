@@ -65,7 +65,7 @@ it('creates the routine active with a nested draft cycle of 5 prescribed days', 
     $this->assertDatabaseCount('routines', 1);
     $this->assertDatabaseCount('cycles', 1);
     $this->assertDatabaseCount('cycle_days', 5);
-    $this->assertDatabaseCount('day_exercises', 10);
+    $this->assertDatabaseCount('day_exercises', 25);
     $this->assertDatabaseHas('cycles', [
         'sequence_number' => 1,
         'status' => 'draft',
@@ -297,7 +297,7 @@ it('renders the whole cycle tree without a lazy load under strict mode', functio
         ->assertCreated()
         ->assertJsonMissingPath('data.user')
         ->assertJsonCount(5, 'data.cycle.days')
-        ->assertJsonCount(2, 'data.cycle.days.0.exercises');
+        ->assertJsonCount(5, 'data.cycle.days.0.exercises');
 });
 
 // TC-19
@@ -310,7 +310,7 @@ it('inserts each exercise name once, slugged, created_by_ai', function () {
         'created_by_ai' => true,
     ]);
     expect(Exercise::where('slug', 'barbell-bench-press')->count())->toBe(1)
-        ->and(Exercise::count())->toBe(10);
+        ->and(Exercise::count())->toBe(24);
 });
 
 // TC-20

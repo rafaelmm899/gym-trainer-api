@@ -76,6 +76,46 @@ it('wraps a planner-thrown exception in CycleGenerationException', function () {
         ->and($thrown->getPrevious()->getMessage())->toBe('timeout');
 });
 
+// TC-27a
+it('puts the experience-level exercise range into the prompt', function () {
+    fakeCyclePlanner();
+    $profile = AthleteProfile::factory()->create(['experience_level' => ExperienceLevel::Intermediate->value]);
+
+    app(CyclePlannerService::class)->planFirstCycle($profile, Goal::Hypertrophy, null);
+
+    CyclePlannerAgent::assertPrompted(
+        fn ($prompt): bool => str_contains($prompt->prompt, 'between 4 and 6 exercises')
+    );
+});
+
+// TC-27b
+it('derives the exercise range from config per experience level', function (string $level, string $range, int $perDay, bool $ok) {
+    config(["training.cycle.exercises_per_day.{$level}" => $range]);
+
+    $payload = cyclePlanPayload();
+    foreach ($payload['days'] as &$day) {
+        $day['exercises'] = array_slice(
+            array_pad($day['exercises'], $perDay, $day['exercises'][0]),
+            0,
+            $perDay,
+        );
+    }
+    unset($day);
+    CyclePlannerAgent::fake([$payload]);
+
+    $profile = AthleteProfile::factory()->create(['experience_level' => $level]);
+    $call = fn () => app(CyclePlannerService::class)->planFirstCycle($profile, Goal::Strength, null);
+
+    $ok
+        ? expect($call())->toBeInstanceOf(CyclePlanData::class)
+        : expect($call)->toThrow(CycleGenerationException::class);
+})->with([
+    'beginner within range' => ['beginner', '3-5', 4, true],
+    'beginner over configured max' => ['beginner', '3-4', 5, false],
+    'advanced under configured min' => ['advanced', '6-8', 5, false],
+    'advanced within widened range' => ['advanced', '4-8', 4, true],
+]);
+
 // TC-27
 it('builds the prompt from every profile field plus the routine goal and hint', function () {
     fakeCyclePlanner();

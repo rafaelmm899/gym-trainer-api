@@ -6,6 +6,7 @@ use App\Ai\Agents\Cycle\CyclePlannerAgent;
 use App\Data\Cycle\CyclePlanData;
 use App\Data\Cycle\CyclePlanDayData;
 use App\Data\Cycle\CyclePlanExerciseData;
+use App\Enums\Profile\ExperienceLevel;
 use App\Enums\Shared\Goal;
 use App\Enums\Shared\MuscleGroup;
 use App\Exceptions\Cycle\CycleGenerationException;
@@ -26,14 +27,14 @@ final class CyclePlannerService
 {
     private const DAYS_PER_CYCLE = 5;
 
-    private const MIN_EXERCISES_PER_DAY = 1;
-
-    private const MAX_EXERCISES_PER_DAY = 8;
-
     public function planFirstCycle(AthleteProfile $profile, Goal $goal, ?string $hint): CyclePlanData
     {
+        [$minExercises, $maxExercises] = $this->exercisesPerDayRange($profile->experience_level);
+
         try {
-            $response = CyclePlannerAgent::make()->prompt($this->buildPrompt($profile, $goal, $hint));
+            $response = CyclePlannerAgent::make()->prompt(
+                $this->buildPrompt($profile, $goal, $hint, $minExercises, $maxExercises)
+            );
         } catch (Throwable $e) {
             throw new CycleGenerationException(previous: $e);
         }
@@ -42,10 +43,28 @@ final class CyclePlannerService
             throw new CycleGenerationException('The planner did not return a structured plan.');
         }
 
-        return $this->mapPlan($response->toArray());
+        return $this->mapPlan($response->toArray(), $minExercises, $maxExercises);
     }
 
-    private function buildPrompt(AthleteProfile $profile, Goal $goal, ?string $hint): string
+    /**
+     * Exercises per training day for this experience level, as `[min, max]`,
+     * from `config('training.cycle.exercises_per_day.*')` (a `"min-max"` string,
+     * overridable per level via `CYCLE_EXERCISES_PER_DAY_*` in `.env`).
+     *
+     * @return array{int, int}
+     */
+    private function exercisesPerDayRange(ExperienceLevel $level): array
+    {
+        $raw = (string) config("training.cycle.exercises_per_day.{$level->value}", '3-8');
+
+        $parts = explode('-', $raw, 2);
+        $min = max(1, (int) $parts[0]);
+        $max = max($min, (int) ($parts[1] ?? '8'));
+
+        return [$min, $max];
+    }
+
+    private function buildPrompt(AthleteProfile $profile, Goal $goal, ?string $hint, int $minExercises, int $maxExercises): string
     {
         $lines = [
             'Build the first training week for this athlete.',
@@ -70,6 +89,8 @@ final class CyclePlannerService
 
         $lines[] = '';
         $lines[] = 'Return exactly 5 training days. All weights are in kilograms.';
+        $lines[] = "Prescribe between {$minExercises} and {$maxExercises} exercises on EVERY day "
+            .'(this athlete\'s experience level); use the higher end for longer sessions.';
 
         return implode("\n", $lines);
     }
@@ -77,7 +98,7 @@ final class CyclePlannerService
     /**
      * @param  array<string, mixed>  $structured
      */
-    private function mapPlan(array $structured): CyclePlanData
+    private function mapPlan(array $structured, int $minExercises, int $maxExercises): CyclePlanData
     {
         $splitRationale = $this->requireString($structured, 'split_rationale');
         $days = $structured['days'] ?? null;
@@ -90,11 +111,14 @@ final class CyclePlannerService
 
         return new CyclePlanData(
             splitRationale: $splitRationale,
-            days: array_map(fn (mixed $day): CyclePlanDayData => $this->mapDay($day), $days),
+            days: array_map(
+                fn (mixed $day): CyclePlanDayData => $this->mapDay($day, $minExercises, $maxExercises),
+                $days,
+            ),
         );
     }
 
-    private function mapDay(mixed $day): CyclePlanDayData
+    private function mapDay(mixed $day, int $minExercises, int $maxExercises): CyclePlanDayData
     {
         if (! is_array($day)) {
             throw new CycleGenerationException('Each plan day must be an object.');
@@ -108,9 +132,9 @@ final class CyclePlannerService
 
         $count = count($exercises);
 
-        if ($count < self::MIN_EXERCISES_PER_DAY || $count > self::MAX_EXERCISES_PER_DAY) {
+        if ($count < $minExercises || $count > $maxExercises) {
             throw new CycleGenerationException(
-                'A day must have between '.self::MIN_EXERCISES_PER_DAY.' and '.self::MAX_EXERCISES_PER_DAY." exercises, got {$count}."
+                "A day must have between {$minExercises} and {$maxExercises} exercises, got {$count}."
             );
         }
 

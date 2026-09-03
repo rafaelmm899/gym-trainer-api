@@ -55,7 +55,7 @@ it('writes the cycle, 5 days and every prescription from a plan DTO', function (
         ->and($firstExercise->rest_seconds)->toBe(90)
         ->and(Exercise::whereKey($firstExercise->exercise_id)->exists())->toBeTrue();
 
-    $this->assertDatabaseCount('day_exercises', 10);
+    $this->assertDatabaseCount('day_exercises', 25);
 });
 
 // TC-29
@@ -68,7 +68,7 @@ it('reuses catalogue rows and opens no transaction of its own', function () {
     $cycle = app(CycleDraftService::class)->persist($routine, $plan);
 
     expect(Exercise::where('slug', 'barbell-bench-press')->count())->toBe(1)
-        ->and(Exercise::count())->toBe(10)
+        ->and(Exercise::count())->toBe(24)
         ->and($cycle->exists)->toBeTrue();
 
     $this->assertDatabaseCount('cycle_days', 5);
