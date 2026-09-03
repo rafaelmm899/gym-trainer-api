@@ -26,8 +26,10 @@ generación del ciclo de la semana siguiente.
   `fat_loss` / `general_health` / `endurance`, independiente del `goal` global
   del perfil) y `days_per_cycle` (fijo en 5 en v1).
 - **Ciclo** — una **semana** de esa rutina. Tiene `sequence_number` (1, 2, 3…) y
-  estado (`generating` / `draft` / `active` / `completed` / `failed`). Por ahora
-  **5 días por ciclo**; a futuro será configurable y elegible por el usuario.
+  estado: `active` (semana en curso), `completed` (se entrenaron sus 5 días y
+  llegó el siguiente), `incomplete` (llegó el siguiente sin terminarla),
+  `generating` / `failed` (job del ciclo N+1). `draft` queda reservado, sin uso
+  en el MVP. Por ahora **5 días por ciclo**; a futuro configurable.
 - **Día del ciclo** — `order` 1..N dentro del ciclo, con `label` (ej. "Pecho") y
   grupos musculares foco. No está atado a un día de la semana concreto; el usuario
   entrena a su ritmo.
@@ -61,36 +63,45 @@ generación del ciclo de la semana siguiente.
      split preferido, limitaciones de equipo. Se pasa a la IA tal cual.
 2. **Crear rutina / generar primer ciclo** — el usuario crea una rutina con `name`
    y `goal`, y opcionalmente un *hint* de texto libre ("quiero PPL", "que el lunes
-   toque piernas", "full body en casa con mancuernas"). Al crearla queda `active`
-   y la rutina que estaba activa pasa a `archived` **para siempre** (de solo
-   lectura, no reactivable). Se dispara la generación del primer ciclo en un
-   **job encolado**. Si más adelante quiere retomar el estilo de una rutina
-   archivada, no la reactiva: crea una rutina nueva desde cero *(clonar una
-   rutina archivada como punto de partida queda fuera de la v1)*.
+   toque piernas", "full body en casa con mancuernas"). El primer ciclo se genera
+   **de forma síncrona dentro del mismo `POST /api/v1/routines`, todo-o-nada**: si
+   la IA responde bien, el `201` trae la rutina `active` **y** su primer ciclo ya
+   `active` (listo para entrenar, sin paso de "activar"), y la rutina que estaba
+   activa pasa a `archived` **para siempre** (de solo lectura, no reactivable); si
+   la IA falla, no se persiste nada (ni la rutina nueva ni el archivado de la
+   anterior) y el endpoint devuelve `502` — el cliente reintenta reenviando el
+   `POST`. No hay estado `generating` en este camino: el primer ciclo nace
+   `active` o no nace. Si más adelante quiere retomar
+   el estilo de una rutina archivada, no la reactiva: crea una rutina nueva desde
+   cero *(clonar una rutina archivada como punto de partida queda fuera de la v1)*.
 3. **La IA arma el ciclo (una semana)** — decide el split (qué grupos musculares
    por día, 5 días por ahora), elige ejercicios y prescribe series, rango de
    repeticiones, peso objetivo, RPE objetivo y descanso. Devuelve un racional del
    split y un racional por ejercicio.
-4. **Revisar y activar** — el ciclo nace como `draft`; el usuario lo activa. El
-   ciclo anterior de la misma rutina pasa a `completed`.
-5. **Entrenar y registrar, día a día** — por cada día entrenado el usuario crea una
+4. **Entrenar y registrar, día a día** — el ciclo ya está `active` desde que se
+   creó; no hay paso de "activar". Por cada día entrenado el usuario crea una
    sesión y registra **cada serie**: peso, repeticiones, RPE opcional, nota.
-6. **Análisis al cerrar cada día** — al completar la sesión, la IA analiza lo
+5. **Análisis al cerrar cada día** — al completar la sesión, la IA analiza lo
    registrado en ese día y produce, **por ejercicio entrenado**, una *recomendación
    de ejercicio*: a qué peso avanzar, cuántas series y/o reps, una `action`
    (`advance_weight` / `hold` / `add_reps` / `add_set` / `deload` /
    `technique_focus`), `confidence` y explicación. Corre en un **job encolado**;
    cada recomendación nueva reemplaza (marca como `superseded`) la anterior del
    mismo ejercicio.
-7. **Ver recomendaciones en vivo** — durante el ciclo en curso el usuario ya ve,
+6. **Ver recomendaciones en vivo** — durante el ciclo en curso el usuario ya ve,
    para cada próximo día / ejercicio, el objetivo sugerido (ej. "próximo día de
    pecho → Press banca 82.5 kg, 3×8, subiste las 3×8 a RPE 7").
-8. **Generar el ciclo siguiente** — el usuario pide el ciclo N+1 de la **rutina
-   activa** (bajo demanda). La IA recibe: perfil + `goal` y `hint` de la rutina +
-   **recomendaciones de ejercicio activas de esa rutina** + un **resumen de
-   progresión** por ejercicio (prescrito vs. real de los días registrados,
-   tendencia de peso/reps/RPE, señal de estancamiento). Genera la semana siguiente;
-   las recomendaciones usadas quedan `applied`. Vuelve al paso 4.
+7. **Generar el ciclo siguiente** — el usuario pide el ciclo N+1 de la **rutina
+   activa** (bajo demanda, en cualquier momento). Corre en un **job encolado**
+   (`generating` → `active`). La IA recibe: perfil + `goal` y `hint` de la rutina
+   + **recomendaciones de ejercicio activas de esa rutina** + un **resumen de
+   progresión** por ejercicio (prescrito vs. real, tendencia de peso/reps/RPE,
+   señal de estancamiento, y un flag `performed` por ejercicio). Al terminar, en
+   una operación atómica (**rollover**): el ciclo N+1 pasa a `active`; el ciclo
+   saliente pasa a `completed` si se entrenaron sus 5 días, si no a `incomplete`;
+   las recomendaciones de ejercicios **entrenados** quedan `applied`, las de
+   ejercicios **no entrenados** siguen `active` y repiten objetivo. Vuelve al
+   paso 4.
 
 ## 5. Rol de la IA
 
@@ -113,9 +124,9 @@ generación del ciclo de la semana siguiente.
 
 ## 6. Alcance de la v1 (MVP)
 
-La v1 es **solo el bucle central de IA**: perfil → generar ciclo → activar →
-registrar series → recomendación → generar el siguiente. Todo lo periférico
-(edición de rutina, históricos, progreso) queda para después.
+La v1 es **solo el bucle central de IA**: perfil → crear rutina (genera el 1er
+ciclo `active`) → registrar series → recomendación → generar el siguiente. Todo
+lo periférico (edición de rutina, históricos, progreso) queda para después.
 
 **Incluye:**
 
@@ -123,10 +134,12 @@ registrar series → recomendación → generar el siguiente. Todo lo periféric
 - **Varias rutinas por usuario** (una `active` a la vez): crear con `name` +
   `goal`. La anterior se archiva automáticamente y para siempre al crear/activar
   otra. En v1 la rutina no se edita después de crearla.
-- Cada rutina con ciclos semanales (5 días fijos en v1) generados por IA (job
-  encolado) con hint opcional.
-- Revisión y activación de ciclos.
-- Registro de sesiones y series (granularidad por serie); completar sesión.
+- Cada rutina con ciclos semanales (5 días fijos en v1) generados por IA con hint
+  opcional: el **primer ciclo** se genera **síncrono** al crear la rutina; el
+  **ciclo N+1** se genera bajo demanda en un **job encolado** (con estado
+  `generating` y polling).
+- Registro de sesiones y series (granularidad por serie) contra el ciclo `active`;
+  completar sesión.
 - Análisis por IA al cerrar cada día → recomendaciones de ejercicio en vivo.
 - Consultar las recomendaciones vigentes (`active`) de la rutina.
 - Generación del ciclo siguiente apoyada en las recomendaciones + resumen de
@@ -139,8 +152,10 @@ registrar series → recomendación → generar el siguiente. Todo lo periféric
   con `name` + `goal` y no se toca hasta generar otra).
 - Endpoint de lectura de una rutina `archived` en detalle / solo lectura (el
   historial se conserva en la base, pero no hay endpoint dedicado en v1).
-- Descartar un borrador de ciclo (en v1 el borrador se activa; no hay acción de
-  descarte).
+- Revisar / editar / descartar un ciclo antes de confirmarlo (en v1 el ciclo nace
+  `active`; `draft` queda reservado para esto a futuro).
+- Validación del ritmo de generación de ciclos (en v1 el N+1 se puede pedir en
+  cualquier momento; si la semana en curso no está completa, queda `incomplete`).
 - Listar el historial de ciclos de una rutina.
 - Listar el historial de sesiones.
 - Endpoints de progreso: resumen (volumen semanal, PRs, adherencia) y series por
@@ -169,7 +184,8 @@ registrar series → recomendación → generar el siguiente. Todo lo periféric
   crear/activar otra archiva la anterior **de forma permanente** (no reactivable,
   no editable, historial visible en solo lectura). Archivar nunca es una acción
   manual independiente: es siempre efecto de activar otra rutina. Dentro de la
-  rutina activa, un solo ciclo `active` y un solo ciclo `draft` a la vez.
+  rutina activa, **un solo ciclo `active` a la vez**; el ciclo N+1 en
+  `generating` no cuenta hasta el rollover.
 - Cada rutina tiene su propio `goal`; el `goal` del perfil es la orientación general
   y sirve de valor por defecto al crear una rutina.
 - Si el análisis de una sesión falla, la sesión igual queda completada; la
@@ -184,7 +200,7 @@ registrar series → recomendación → generar el siguiente. Todo lo periféric
 | IA | `laravel/ai ^0.6.8`, agentes `HasStructuredOutput` + `Promptable` |
 | Providers IA | `anthropic` y `openai`, default por env |
 | Auth | Laravel Sanctum (modo SPA: cookie + CSRF) |
-| Async | Jobs encolados para generación de ciclo y para análisis de sesión (`database` queue en dev) |
+| Async | Job encolado para el ciclo N+1 y para el análisis de sesión (`database` queue en dev). El **primer ciclo** se genera **síncrono** dentro de `POST /routines`. |
 | DB | PostgreSQL 17 (código agnóstico vía Eloquent; MySQL sigue siendo compatible) |
 | Tests | Pest — feature por endpoint, unit para servicios, agentes con respuesta *fake* (sin llamadas reales a la IA) |
 | Estilo | Laravel Pint |
@@ -196,8 +212,8 @@ registrar series → recomendación → generar el siguiente. Todo lo periféric
 
 ## 10. Criterios de éxito
 
-- Un usuario nuevo puede: registrarse → cargar perfil → generar su primer ciclo →
-  activarlo → registrar los días de esa semana.
+- Un usuario nuevo puede: registrarse → cargar perfil → crear una rutina (que
+  genera y deja `active` su primer ciclo) → registrar los días de esa semana.
 - Al cerrar el día de pecho, antes de generar nada más, el usuario ve el objetivo
   sugerido para el próximo día de pecho (peso, series, reps + explicación).
 - El ciclo siguiente refleja ese avance: muestra recomendaciones de peso/series/reps
