@@ -53,7 +53,7 @@ return [
         'anthropic' => [
             'driver' => 'anthropic',
             'key' => env('AI_PROVIDER_API_KEY', env('ANTHROPIC_API_KEY')),
-            'url' => env('ANTHROPIC_URL', 'https://api.anthropic.com/v1'),
+            'url' => env('AI_PROVIDER_URL', env('ANTHROPIC_URL', 'https://api.anthropic.com/v1')),
             'models' => [
                 'text' => [
                     'default' => env('AI_PROVIDER_MODEL', 'claude-haiku-4-5-20251001'),
@@ -99,7 +99,7 @@ return [
         'gemini' => [
             'driver' => 'gemini',
             'key' => env('AI_PROVIDER_API_KEY', env('GEMINI_API_KEY')),
-            'url' => env('GEMINI_URL', 'https://generativelanguage.googleapis.com/v1beta/'),
+            'url' => env('AI_PROVIDER_URL', env('GEMINI_URL', 'https://generativelanguage.googleapis.com/v1beta/')),
             'models' => [
                 'text' => [
                     'default' => env('AI_PROVIDER_MODEL'),
@@ -136,7 +136,7 @@ return [
         'openai' => [
             'driver' => 'openai',
             'key' => env('AI_PROVIDER_API_KEY', env('OPENAI_API_KEY')),
-            'url' => env('OPENAI_URL', 'https://api.openai.com/v1'),
+            'url' => env('AI_PROVIDER_URL', env('OPENAI_URL', 'https://api.openai.com/v1')),
             'models' => [
                 'text' => [
                     'default' => env('AI_PROVIDER_MODEL', 'gpt-5.4'),
