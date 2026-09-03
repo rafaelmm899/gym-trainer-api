@@ -35,14 +35,25 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="CYCLE_EXERCISES_PER_DAY_BEGINNER" value="3-5"/>
+        <env name="CYCLE_EXERCISES_PER_DAY_INTERMEDIATE" value="4-6"/>
+        <env name="CYCLE_EXERCISES_PER_DAY_ADVANCED" value="5-8"/>
 
         <!--
             The Docker `app` service loads `.env` via `env_file`, so CACHE_STORE,
-            SESSION_DRIVER, DB_* and APP_URL reach the CLI as shell env vars — in
-            getenv()/$_ENV, not $_SERVER. Laravel's env() reads $_SERVER first, so
-            the <env> lines above lose to the shell values while these <server>
-            lines fill the untouched $_SERVER slots and win. Keeps the suite on
-            array/sqlite/sync — never the dev Redis/Postgres.
+            SESSION_DRIVER, DB_*, APP_URL and the CYCLE_EXERCISES_PER_DAY_* keys
+            reach the CLI as shell env vars — in getenv()/$_ENV, not $_SERVER.
+            Laravel's env() reads $_SERVER first, so the <env> lines above lose to
+            the shell values while these <server> lines fill the untouched
+            $_SERVER slots and win. Keeps the suite on array/sqlite/sync — never
+            the dev Redis/Postgres.
+
+            The CYCLE_EXERCISES_PER_DAY_* values pin the planner's ranges so a
+            local .env can't turn the suite red. Beginner/intermediate match the
+            config defaults; advanced is kept deliberately wide (5-8, vs the 6-8
+            default) so the shared 5-exercise/day fake plan validates for every
+            level. The real per-level enforcement is covered by TC-27b, which
+            sets the range explicitly.
         -->
         <server name="APP_ENV" value="testing"/>
         <server name="APP_URL" value="http://localhost"/>
@@ -51,5 +62,8 @@
         <server name="QUEUE_CONNECTION" value="sync"/>
         <server name="DB_CONNECTION" value="sqlite"/>
         <server name="DB_DATABASE" value=":memory:"/>
+        <server name="CYCLE_EXERCISES_PER_DAY_BEGINNER" value="3-5"/>
+        <server name="CYCLE_EXERCISES_PER_DAY_INTERMEDIATE" value="4-6"/>
+        <server name="CYCLE_EXERCISES_PER_DAY_ADVANCED" value="5-8"/>
     </php>
 </phpunit>

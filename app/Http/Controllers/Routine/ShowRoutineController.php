@@ -9,6 +9,8 @@ final class ShowRoutineController
 {
     public function __invoke(Routine $routine): RoutineResource
     {
+        $routine->load('cycle.cycleDays.dayExercises.exercise');
+
         return RoutineResource::make($routine);
     }
 }

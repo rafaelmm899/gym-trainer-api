@@ -91,6 +91,8 @@ final class CyclePlannerService
         $lines[] = 'Return exactly 5 training days. All weights are in kilograms.';
         $lines[] = "Prescribe between {$minExercises} and {$maxExercises} exercises on EVERY day "
             .'(this athlete\'s experience level); use the higher end for longer sessions.';
+        $lines[] = 'Pick ONE count in that range and use it on all 5 days — a day with fewer '
+            ."than {$minExercises} exercises makes the whole plan invalid.";
 
         return implode("\n", $lines);
     }

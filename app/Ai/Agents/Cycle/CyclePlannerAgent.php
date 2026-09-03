@@ -7,6 +7,7 @@ use App\Services\Cycle\CyclePlannerService;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\ObjectType;
 use Illuminate\JsonSchema\Types\Type;
+use Laravel\Ai\Attributes\MaxTokens;
 use Laravel\Ai\Attributes\Timeout;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
@@ -23,8 +24,19 @@ use Laravel\Ai\Promptable;
  * model (`config('ai.providers.<driver>.models.text.default')`, set from the
  * `AI_PROVIDER_MODEL` env var); the 60 s timeout bounds the worst case for the
  * synchronous create request.
+ *
+ * `#[MaxTokens(7000)]` because a full 5-day plan (6–8 exercises a day, each with
+ * a rationale) plus the reasoning the recovery/isolation rule triggers runs to
+ * ~6k completion tokens. Without an explicit cap OpenAI-compatible providers
+ * apply a small default and truncate the JSON mid-plan (`finish_reason: length`),
+ * which then fails schema validation or yields fewer than 5 days. 7000 clears the
+ * generation with ~1k headroom; note that prompt + cap (~7.7k) then nearly fills
+ * Groq's free-tier 8k tokens-per-minute budget, so there is room for roughly one
+ * request per minute and none for a retry — a busier setup needs the Groq dev
+ * tier or a larger model.
  */
 #[Timeout(60)]
+#[MaxTokens(7000)]
 final class CyclePlannerAgent implements Agent, HasStructuredOutput
 {
     use Promptable;
@@ -39,8 +51,10 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
 
             HARD REQUIREMENTS — the response is rejected otherwise:
             - `days` MUST contain EXACTLY 5 entries. Not 3, not 4, not 6 — five.
-            - Every day MUST contain the number of `exercises` the prompt asks
-              for — the same count on every day, within the given range.
+            - The prompt gives an exercises-per-day range. Pick ONE integer N
+              inside that range and give EVERY one of the 5 days exactly N
+              `exercises` — same count on all five, never fewer, never more. A
+              day with 2 exercises when the range is 6–8 fails the whole plan.
             - Every exercise MUST set a numeric `target_weight_kg` in KILOGRAMS,
               estimated from the athlete's experience level and notes. Never omit
               it; never use 0 for a loaded lift (a genuine bodyweight move may
@@ -50,6 +64,11 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
             - Every value in a day's `focus_muscle_groups` and every exercise's
               `primary_muscle_group` MUST be one of: {$groups}
               (`primary_muscle_group` may also be null).
+            - RECOVERY: two back-to-back days MUST NOT share any muscle group.
+              Day N and day N+1 must have disjoint `focus_muscle_groups`, and no
+              `primary_muscle_group` may appear on both. A muscle group trained
+              on day N is not trained again before day N+3 (train quads on day 1
+              → next quads day 4 at the earliest). Isolate the split cleanly.
 
             Guidance:
             - Fill the athlete's session — roughly one working exercise per
@@ -58,6 +77,10 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
               accessories.
             - Order the 5 days as the athlete should train them; order exercises
               within each day.
+            - Watch the overlap compound lifts create: heavy pressing loads the
+              shoulders and triceps, rows and deadlifts load the back and
+              hamstrings — keep those off the day next to a dedicated shoulder,
+              arm, back or hamstring day.
             - Respect the athlete's available days per week, session length, goal,
               and any injuries or preferences in their notes.
             - Give a short `split_rationale` for the week, a `day_rationale` per
@@ -68,9 +91,14 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
     /**
      * Strict-mode compatible: every object lists all its properties in
      * `required` (via {@see object()}) and sets `additionalProperties: false`;
-     * a logically-optional field stays required but nullable. The day count is
-     * fixed at 5 here; the exercises-per-day range is athlete-specific and lives
-     * in the prompt + {@see CyclePlannerService} validation, not the schema.
+     * a logically-optional field stays required but nullable.
+     *
+     * No array-length keywords (`minItems`/`maxItems`): Groq's `json_schema`
+     * strict mode validates them *after* generation but does not use them to
+     * constrain decoding, so a model that emits 1 day instead of 5 gets a hard
+     * provider 400 (`json_validate_failed`) instead of a plan we can reject
+     * ourselves. The day count and the exercises-per-day range are enforced in
+     * the prompt and in {@see CyclePlannerService}.
      *
      * @return array<string, Type>
      */
@@ -80,13 +108,10 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
             'split_rationale' => $schema->string()
                 ->description('Why the muscle groups are split across the 5 days this way.'),
             'days' => $schema->array()
-                ->min(5)
-                ->max(5)
                 ->description('Exactly 5 training days, in training order.')
                 ->items($this->object($schema, [
                     'label' => $schema->string()->description('Short name for the day, e.g. "Chest" or "Lower A".'),
                     'focus_muscle_groups' => $schema->array()
-                        ->min(1)
                         ->items($schema->string()->enum(MuscleGroup::values())),
                     'day_rationale' => $schema->string(),
                     'exercises' => $schema->array()->items($this->object($schema, [
