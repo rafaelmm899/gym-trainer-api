@@ -98,7 +98,7 @@ mistaken set is corrected in place, not erased.
 - `App\Http\Resources\Session\SetLogResource` — the `POST` `201` / `PUT` `200`
   body; embeds `ExerciseResource` for the set's exercise.
 - `App\Policies\SetLogPolicy` — `create(User, TrainingSession)` and
-  `update(User, SetLog)`; auto-discovered; wired through the Form Requests.
+  `update(User, TrainingSession)` — both gate on session ownership; auto-discovered; wired through the Form Requests.
 - Three routes added to the `auth:sanctum` group in `routes/api.php`
   (`exercises.list`, `sessions.sets.store`, `sessions.sets.update`); the set
   routes constrained with `->whereUuid(...)` and the `PUT` route
@@ -323,7 +323,7 @@ catalogue is global and owned by no one (like `POST /api/v1/logout`,
 
 | Role | Permissions |
 |---|---|
-| Authenticated user | Read the global exercise catalogue (no ownership dimension). Log a set into a **training session they own** — `SetLogPolicy::create(User $user, TrainingSession $session): bool` returns `$session->user_id === $user->id`. Correct a set whose **session they own** — `SetLogPolicy::update(User $user, SetLog $set): bool` returns `$set->loadMissing('session')->session->user_id === $user->id`. No other permission, no other actor. **No delete permission** (ticket deviation). |
+| Authenticated user | Read the global exercise catalogue (no ownership dimension). Log a set into a **training session they own** — `SetLogPolicy::create(User $user, TrainingSession $session): bool` returns `$session->user_id === $user->id`. Correct a set under a **session they own** — `SetLogPolicy::update(User $user, TrainingSession $session): bool` returns `$session->user_id === $user->id` (the `{set}` is scope-bound to `{session}`, so owning the session is owning its sets). No other permission, no other actor. **No delete permission** (ticket deviation). |
 
 - `LogSetRequest::authorize()` →
   `$this->user()?->can('create', [SetLog::class, $this->route('session')]) ?? false`.
@@ -331,13 +331,13 @@ catalogue is global and owned by no one (like `POST /api/v1/logout`,
   `$this->route('session')` is the bound `TrainingSession` (or the request 404s
   first). Foreign session → `AuthorizationException` → `403`.
 - `UpdateSetLogRequest::authorize()` →
-  `$this->user()?->can('update', $this->route('set')) ?? false`. `{set}` is
-  scope-bound to `{session}`, so a `{set}` from another of the user's own
-  sessions passed under the wrong `{session}` 404s before the Policy; a `{set}`
-  whose session belongs to another user → `403`.
-- `SetLogPolicy::update` uses `loadMissing('session')` (an explicit eager load)
-  rather than touching `$set->session` lazily — `Model::shouldBeStrict(!
-  isProduction())` makes a lazy load throw outside production.
+  `$this->user()?->can('update', [SetLog::class, $this->route('session')]) ?? false`.
+  `{set}` is scope-bound to `{session}`, so a `{set}` from another of the user's
+  own sessions passed under the wrong `{session}` 404s before the Policy; a
+  `{session}` that belongs to another user → `403`.
+- `SetLogPolicy::update` gates on the bound `{session}` (not the `{set}`): the
+  route scopes `{set}` to `{session}`, so session ownership is set ownership,
+  and the Policy stays a pure `user_id` comparison with no relation access.
 - The session's `completed` / `in_progress` state and the `day_exercise`
   ownership are **business rules** (Service guards → `409`), **not**
   authorization. An owned but completed session → `409`, never `403`.
@@ -398,32 +398,33 @@ then `$this->user = User::factory()->create()` and
 `AthleteProfile::factory()->for($this->user)->create()`. AI is never called —
 tests build catalogue rows and cycle trees with factories.
 
-A helper at the top of `tests/Feature/Session/LogSetTest.php` builds an open
-session with a real prescription tree:
+Two shared helpers in `tests/Helpers.php` (alongside the existing
+`trainingRoutineWithCycle`) build the fixtures — `openPlannedSession(User)` (an
+open session against the first day of a real active cycle) and
+`openFreeSession(User)` (an open session with no cycle day; reuses the user's
+routine if they already have one):
 
 ```php
+// tests/Helpers.php — reuses the existing trainingRoutineWithCycle() helper.
 function openPlannedSession(User $user): TrainingSession
 {
-    $routine = Routine::factory()->for($user)->create();          // status: active
-    $cycle = Cycle::factory()->active()->for($routine)->create();
-    CycleDay::factory()->count(5)->for($cycle)->sequence(
-        fn ($seq) => ['order' => $seq->index + 1]
-    )->create()->each(
-        fn (CycleDay $d) => DayExercise::factory()->count(3)->for($d)->sequence(
-            fn ($seq) => ['order' => $seq->index + 1]
-        )->create()
-    );
+    $routine = trainingRoutineWithCycle($user);                    // active routine + 5-day active cycle
 
     return TrainingSession::factory()->for($user)->for($routine)
-        ->planned($cycle->cycleDays->first())->create();           // status: in_progress
+        ->planned($routine->cycle->cycleDays->first())->create()   // status: in_progress
+        ->load('cycleDay.dayExercises.exercise');
 }
 
 function openFreeSession(User $user): TrainingSession
 {
-    $routine = Routine::factory()->for($user)->create();
+    // One active routine per user — reuse it if the user already has one.
+    $routine = $user->routines()->first() ?? Routine::factory()->for($user)->create();
+
     return TrainingSession::factory()->for($user)->for($routine)->create(); // cycle_day_id null
 }
 ```
+
+One `in_progress` session per user is a DB invariant (`training_sessions_user_in_progress_unique`), so a test needing a *second* session for the same user makes it `->completed()`.
 
 ### GET `/api/v1/exercises` — `tests/Feature/Exercise/ListExercisesTest.php`
 
@@ -678,7 +679,7 @@ function openFreeSession(User $user): TrainingSession
 **TC-49:** `SetLogPolicy::update` allows the owner of the set's session, denies others
 - **Given:** `$owner`, `$stranger`; a persisted `SetLog` whose session's `user_id = $owner->id`
 - **When:** `->update($owner, $set)` and `->update($stranger, $set)`
-- **Expect:** `true` / `false`; no strict-mode lazy-load error (the Policy uses `loadMissing('session')`)
+- **Expect:** `true` / `false`; the Policy is a pure `user_id` comparison on the bound session (no DB, no relation access)
 
 ### Architecture — `tests/Feature/ArchTest.php` (added rule)
 
@@ -720,11 +721,11 @@ function openFreeSession(User $user): TrainingSession
 | `SetLog` casts | `set_number` → `integer`, `weight_kg` → `decimal:2`, `reps` → `integer`, `rpe` → `decimal:1`. `weight_kg` / `rpe` therefore read back as strings; `SetLogResource` casts them to `(float)` / `null`. | `decimal:*` is the codebase convention for money-like precision (`DayExercise::target_weight_kg` / `target_rpe`). The Resource float-casts exactly as `DayExerciseResource` does. |
 | Response body | `SetLogResource`: `id` (uuid), `exercise` = `ExerciseResource::make($this->whenLoaded('exercise'))`, `set_number`, `weight_kg` (float), `reps` (int), `rpe` (float\|null), `note`, `created_at`, `updated_at` (ISO-8601). `POST` → `201` via `->response()->setStatusCode(...)`; `PUT` → `200` via a bare `SetLogResource::make(...)` return. | `CLAUDE.md` rule 3 (always a real `JsonResource`) + "one per entity, compose with nested resources". The client accumulates session state from these single-set responses; a whole-session serializer with its set list is Order 330's job. |
 | `exercise` reuses `ExerciseResource` | The nested `exercise` block in `SetLogResource` is the same `ExerciseResource` the catalogue endpoint returns — `{ id, name, slug, primary_muscle_group }`. | `CLAUDE.md`: one Resource per entity, composed. `slug` / `primary_muscle_group` are harmless extra context and keep a single source of truth for the exercise shape. |
-| Eager loading | Both Actions return `$set->load('exercise')`. `SetLoggingService::resolveExercise()` loads the `DayExercise` with `with('exercise')`. `SetLogPolicy::update` uses `loadMissing('session')`. | `Model::shouldBeStrict(!isProduction())` makes any lazy load in the Resource or Policy throw. Same discipline as `TrainingSessionCreateAction`'s `->load(...)`. |
+| Eager loading | Both Actions return `$set->load('exercise')`. `SetLoggingService::resolveExercise()` loads the `DayExercise` with `with('exercise')`. `SetLogPolicy::update` gates on the bound `{session}`, not the `{set}`, so it needs no relation access. | `Model::shouldBeStrict(!isProduction())` makes any lazy load in the Resource or Policy throw. Same discipline as `TrainingSessionCreateAction`'s `->load(...)`. |
 | Request DTOs | `App\Data\Session\LogSetData` (`?string $day_exercise_id`, `?string $exercise_id`, `int $set_number`, `float $weight_kg`, `int $reps`, `?float $rpe`, `?string $note`) and `App\Data\Session\UpdateSetLogData` (`float $weight_kg`, `int $reps`, `?float $rpe`, `?string $note`), both `final … extends Data`, built with `::from($request->validated())`. Required params first (PHP promotion), snake_case names map 1:1 to the validated keys. | `CLAUDE.md` convention (writes take a `Data` object). Snake_case props avoid a `#[MapInputName]`. |
 | `rpe` 0.5-step rule | An inline closure rule in `rules()`: `fn ($attr, $value, $fail) => fmod((float) $value * 2, 1.0) !== 0.0 && $fail(...)`. No rule class. | One trivial check used in two Form Requests — a dedicated `Rule` object would be indirection with no reuse pressure (`CLAUDE.md` rule 6). If a third caller appears, extract it then. |
 | `""` / whitespace normalisation | `prepareForValidation()` collapses whitespace-only `day_exercise_id` / `exercise_id` / `note` to `null` (`$this->merge([...])`), mirroring `StoreRoutineRequest::hint` / `StoreTrainingSessionRequest::day`. | Keeps `required_without` / `nullable` honest when a client sends `""` for "not set". |
-| Authorization | `SetLogPolicy::create(User, TrainingSession)` and `update(User, SetLog)`; auto-discovered; wired via the Form Requests' `authorize()`. No `delete`. Route-model binding runs first, so unknown ids → `404` before `403`. | First endpoint pair where a Policy `403` is reachable on a nested write. Ownership is the only rule; session state and the day check are `409` business rules. |
+| Authorization | `SetLogPolicy::create(User, TrainingSession)` and `update(User, TrainingSession)` — both gate on session ownership (`{set}` is scope-bound to `{session}`); `UpdateSetLogRequest::authorize()` calls `can('update', [SetLog::class, $this->route('session')])`. Auto-discovered; wired via the Form Requests. No `delete`. Route-model binding runs first, so unknown ids → `404` before `403`. | First endpoint pair where a Policy `403` is reachable on a nested write. Ownership is the only rule; session state and the day check are `409` business rules. |
 | `TrainingSession::sets()` FK | `$this->hasMany(SetLog::class, 'session_id')` — the FK is named **explicitly**; `SetLog::session()` is `belongsTo(TrainingSession::class)` (method name `session` → `session_id`, inferred). | `TrainingSession` would otherwise infer `training_session_id`. `session_id` is the `data-model.md` column. |
 | Mass assignment | `SetLog` `#[Fillable(['session_id', 'exercise_id', 'set_number', 'weight_kg', 'reps', 'rpe', 'note'])]`. The create Action writes through `$session->sets()->create([...])` (the relation sets `session_id`); `exercise_id` is set from the Service-resolved model, never from the request body. | `Model::preventSilentlyDiscardingAttributes()` (strict mode) throws on a non-fillable `create()` key. `session_id` / `exercise_id` are server-derived (never from `$request->validated()`), so there is no mass-assignment exposure — same reasoning as `TrainingSession` carrying `user_id` / `cycle_day_id`. |
 | Unique index vs guard | Composite `unique(session_id, exercise_id, set_number)` **and** the contiguity guard. | The guard gives a clean `409` in the normal flow; the index is the concurrency backstop. A double-submit race that beats the guard → `QueryException` → `500` — the tradeoff the routine / session specs already accept. |
@@ -752,11 +753,11 @@ endpoint feature tests) are the functional gate.
 | 5 | Create `database/factories/SetLogFactory.php` (`@extends Factory<SetLog>`): `session_id => TrainingSession::factory()`, `exercise_id => Exercise::factory()`, `set_number => 1`, `weight_kg => fake()->randomFloat(2, 20, 150)`, `reps => fake()->numberBetween(3, 12)`, `rpe => fake()->optional()->randomElement([6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0])`, `note => fake()->optional()->sentence()` | `SetLog::factory()->create()` persists one row with a `uuid`; `->for($session, 'session')->for($exercise)->create()` works; Pint + PHPStan clean. |
 | 6 | Create `app/Data/Session/LogSetData.php` and `app/Data/Session/UpdateSetLogData.php` (`make:data`, move to `app/Data/Session/`, fix namespace) per §9 (required params first, snake_case props) | `LogSetData::from(['exercise_id' => $u, 'set_number' => 1, 'weight_kg' => 60, 'reps' => 10])->exercise_id === $u`; `UpdateSetLogData::from([...])` maps the four fields; Pint + PHPStan clean. |
 | 7 | Create `app/Exceptions/Session/SessionAlreadyCompletedException.php`, `DayExerciseNotInSessionException.php`, `NonContiguousSetNumberException.php` — `final extends DomainException`; `$errorCode` = `SESSION_ALREADY_COMPLETED` / `DAY_EXERCISE_NOT_IN_SESSION` / `NON_CONTIGUOUS_SET_NUMBER`; the first two set a fixed message, `NonContiguousSetNumberException::__construct(int $expected)` interpolates it | `(new SessionAlreadyCompletedException)->errorCode()` / `->statusCode() === 409` for each; `(new NonContiguousSetNumberException(3))->getMessage()` contains `3`; Pint + PHPStan clean. |
-| 8 | Create `app/Policies/SetLogPolicy.php`: `create(User $user, TrainingSession $session): bool => $session->user_id === $user->id`; `update(User $user, SetLog $set): bool => $set->loadMissing('session')->session->user_id === $user->id`. Write `tests/Unit/Session/SetLogPolicyTest.php` (TC-48, TC-49) | `vendor/bin/pest tests/Unit/Session/SetLogPolicyTest.php` green; no strict-mode lazy-load; Pint + PHPStan clean. |
+| 8 | Create `app/Policies/SetLogPolicy.php`: `create(User $user, TrainingSession $session): bool => $session->user_id === $user->id`; `update(User $user, TrainingSession $session): bool => $session->user_id === $user->id` (both gate on the session; `{set}` is scope-bound to `{session}`). Write `tests/Unit/Session/SetLogPolicyTest.php` (TC-48, TC-49) as pure in-memory tests. | `vendor/bin/pest tests/Unit/Session/SetLogPolicyTest.php` green; Pint + PHPStan clean. |
 | 9 | Create `app/Services/Session/SetLoggingService.php` (`final`): `guardOpen(TrainingSession $session): void` (`throw_if($session->status === SessionStatus::Completed, new SessionAlreadyCompletedException)`); `resolveExercise(TrainingSession $session, LogSetData $data): Exercise` (`day_exercise_id` → `DayExercise::query()->with('exercise')->where('uuid', …)->firstOrFail()`, `throw_unless($session->cycle_day_id !== null && $dayExercise->cycle_day_id === $session->cycle_day_id, new DayExerciseNotInSessionException)`, return `$dayExercise->exercise`; else `Exercise::query()->where('uuid', $data->exercise_id)->firstOrFail()`); `guardContiguousSetNumber(TrainingSession $session, Exercise $exercise, int $setNumber): void` (`$expected = $session->sets()->where('exercise_id', $exercise->id)->count() + 1; throw_unless($setNumber === $expected, new NonContiguousSetNumberException($expected))`). Write `tests/Feature/Session/SetLoggingServiceTest.php` (TC-42…TC-47) | `final`; `vendor/bin/pest tests/Feature/Session/SetLoggingServiceTest.php` green; no strict-mode lazy-load; Pint + PHPStan clean. |
 | 10 | Create `app/Actions/Session/SetLogCreateAction.php` (`final`, ctor injects `SetLoggingService`): `handle(TrainingSession $session, LogSetData $data): SetLog` — `guardOpen`; `$exercise = resolveExercise(...)`; `guardContiguousSetNumber(...)`; `DB::transaction(fn () => $session->sets()->create(['exercise_id' => $exercise->id, 'set_number' => $data->set_number, 'weight_kg' => $data->weight_kg, 'reps' => $data->reps, 'rpe' => $data->rpe, 'note' => $data->note]))`; return `$set->load('exercise')`. Create `app/Actions/Session/SetLogUpdateAction.php` (`final`, same ctor): `handle(TrainingSession $session, SetLog $set, UpdateSetLogData $data): SetLog` — `guardOpen($session)`; `DB::transaction(fn () => $set->update([...four fields...]))`; return `$set->load('exercise')` | Both `final` + `handle()`; covered by TC-42, TC-43, TC-47; Pint + PHPStan clean. |
 | 11 | Create `app/Http/Requests/Session/LogSetRequest.php`: `authorize()` → `$this->user()?->can('create', [SetLog::class, $this->route('session')]) ?? false`; `rules()` per §2.1 (`day_exercise_id` / `exercise_id` each `['nullable','uuid','exists:…','required_without:<other>','prohibits:<other>']`; `set_number` `['required','integer','min:1']`; `weight_kg` `['required','numeric','min:0','max:1000','decimal:0,2']`; `reps` `['required','integer','min:1','max:100']`; `rpe` `['nullable','numeric','min:0','max:10', <0.5-step closure>]`; `note` `['nullable','string','max:1000']`); `prepareForValidation()` nulls whitespace-only `day_exercise_id` / `exercise_id` / `note` | extends `FormRequest`; Pint + PHPStan clean; both-ids and neither-id inputs fail validation; a whitespace id becomes `null`. |
-| 12 | Create `app/Http/Requests/Session/UpdateSetLogRequest.php`: `authorize()` → `$this->user()?->can('update', $this->route('set')) ?? false`; `rules()` → `weight_kg` / `reps` required + `rpe` / `note` nullable (same constraints as task 11); `prepareForValidation()` nulls whitespace-only `note` | extends `FormRequest`; Pint + PHPStan clean; `set_number` / `exercise_id` are absent from `rules()`. |
+| 12 | Create `app/Http/Requests/Session/UpdateSetLogRequest.php`: `authorize()` → `$this->user()?->can('update', [SetLog::class, $this->route('session')]) ?? false`; `rules()` → `weight_kg` / `reps` required + `rpe` / `note` nullable (same constraints as task 11); `prepareForValidation()` nulls whitespace-only `note` | extends `FormRequest`; Pint + PHPStan clean; `set_number` / `exercise_id` are absent from `rules()`. |
 | 13 | Create `app/Http/Resources/Exercise/ExerciseResource.php` (`@mixin Exercise`): `id => $this->uuid`, `name`, `slug`, `primary_muscle_group => $this->primary_muscle_group?->value`. Create `app/Http/Resources/Session/SetLogResource.php` (`@mixin SetLog`): `id => $this->uuid`, `exercise => ExerciseResource::make($this->whenLoaded('exercise'))`, `set_number`, `weight_kg => (float) $this->weight_kg`, `reps`, `rpe => $this->rpe !== null ? (float) $this->rpe : null`, `note`, `created_at` / `updated_at` via `?->toIso8601String()` | `toArray()` of each has no internal `*_id` key; `SetLogResource` `id` is the uuid; Pint + PHPStan clean. |
 | 14 | Create `app/Http/Controllers/Exercise/ListExercisesController.php` (`make:controller --invokable`, move + fix namespace): `__invoke(Request $request): AnonymousResourceCollection` — `$term = trim((string) $request->query('q', ''))`; `$mg = MuscleGroup::tryFrom((string) $request->query('muscle_group', ''))`; `Exercise::query()->when($term !== '', fn (Builder $q) => $q->whereRaw('LOWER(name) LIKE ?', ['%'.mb_strtolower($term).'%']))->when($mg !== null, fn (Builder $q) => $q->where('primary_muscle_group', $mg->value))->orderBy('name')->limit(50)->get()`; return `ExerciseResource::collection(...)`. Create `app/Http/Controllers/Session/LogSetController.php` (`__invoke(LogSetRequest $request, TrainingSession $session, SetLogCreateAction $action): JsonResponse` → `SetLogResource::make($action->handle($session, LogSetData::from($request->validated())))->response()->setStatusCode(Response::HTTP_CREATED)`). Create `app/Http/Controllers/Session/UpdateSetLogController.php` (`__invoke(UpdateSetLogRequest $request, TrainingSession $session, SetLog $set, SetLogUpdateAction $action): SetLogResource` → `SetLogResource::make($action->handle($session, $set, UpdateSetLogData::from($request->validated())))`) | Each `final`, `__invoke` only; Pint + PHPStan clean. |
 | 15 | Edit `routes/api.php`: add the three `use` imports; inside the `auth:sanctum` group add `Route::get('exercises', ListExercisesController::class)->name('exercises.list')`, `Route::post('sessions/{session}/sets', LogSetController::class)->whereUuid('session')->name('sessions.sets.store')`, `Route::put('sessions/{session}/sets/{set}', UpdateSetLogController::class)->whereUuid('session')->whereUuid('set')->scopeBindings()->name('sessions.sets.update')` | `php artisan route:list` shows the three routes under `auth:sanctum`; PHPStan clean in `routes/`. |

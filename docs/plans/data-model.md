@@ -280,6 +280,9 @@ que consume la IA se calculan a partir de estas filas.
 **Reglas**
 - Prescrito vs. real: se obtiene uniendo `set_logs` → `training_sessions.cycle_day_id` →
   `day_exercises` por `exercise_id`. Sin columna puente.
+- `set_number` lo envía el cliente y se valida contiguo por `(session, exercise)`
+  (la serie N solo se acepta si ya existen N−1 series de ese ejercicio en la
+  sesión). Único `(session_id, exercise_id, set_number)`.
 
 ---
 

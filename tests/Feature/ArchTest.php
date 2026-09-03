@@ -23,6 +23,10 @@ arch('session controllers are invokable')
     ->expect('App\Http\Controllers\Session')
     ->toBeInvokable();
 
+arch('exercise controllers are invokable')
+    ->expect('App\Http\Controllers\Exercise')
+    ->toBeInvokable();
+
 arch('form requests extend FormRequest')
     ->expect('App\Http\Requests')
     ->toExtend('Illuminate\Foundation\Http\FormRequest');

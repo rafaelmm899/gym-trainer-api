@@ -4,12 +4,15 @@ use App\Http\Controllers\Auth\CurrentUserController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Auth\RegisterController;
+use App\Http\Controllers\Exercise\ListExercisesController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
 use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
+use App\Http\Controllers\Session\LogSetController;
 use App\Http\Controllers\Session\StoreTrainingSessionController;
+use App\Http\Controllers\Session\UpdateSetLogController;
 use Illuminate\Support\Facades\Route;
 
 // Public: no auth:sanctum, no Policy — no actor and no resource yet.
@@ -47,4 +50,18 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('routines/{routine}/sessions', StoreTrainingSessionController::class)
         ->whereUuid('routine')
         ->name('routines.sessions.store');
+
+    // Exercise catalogue: global, read-only, owned by no one — no Policy.
+    Route::get('exercises', ListExercisesController::class)->name('exercises.list');
+
+    // Set logs: nested under the session (bound by uuid); the Form Requests
+    // delegate authorization to SetLogPolicy. {set} is scoped to {session}.
+    Route::post('sessions/{session}/sets', LogSetController::class)
+        ->whereUuid('session')
+        ->name('sessions.sets.store');
+    Route::put('sessions/{session}/sets/{set}', UpdateSetLogController::class)
+        ->whereUuid('session')
+        ->whereUuid('set')
+        ->scopeBindings()
+        ->name('sessions.sets.update');
 });
