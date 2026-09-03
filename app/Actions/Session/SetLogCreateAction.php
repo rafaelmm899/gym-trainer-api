@@ -17,12 +17,11 @@ final class SetLogCreateAction
 {
     public function handle(TrainingSession $session, LogSetData $data): SetLog
     {
-        throw_if($session->status === SessionStatus::Completed, new SessionAlreadyCompletedException);
+        $this->ensureSessionOpen($session);
 
         $exercise = $this->resolveExercise($session, $data);
 
-        $nextNumber = $session->sets()->where('exercise_id', $exercise->id)->count() + 1;
-        throw_unless($data->set_number === $nextNumber, new NonContiguousSetNumberException($nextNumber));
+        $this->ensureSetNumberIsNext($session, $exercise, $data->set_number);
 
         $set = DB::transaction(fn (): SetLog => $session->sets()->create([
             'exercise_id' => $exercise->id,
@@ -36,28 +35,48 @@ final class SetLogCreateAction
         return $set->load('exercise');
     }
 
+    private function ensureSessionOpen(TrainingSession $session): void
+    {
+        throw_if($session->status === SessionStatus::Completed, new SessionAlreadyCompletedException);
+    }
+
     /**
      * The set's catalogue exercise: straight from `exercise_id` for an off-plan
-     * set, or via `day_exercise_id` — which must be a prescription of this
-     * session's own training day (a free session has none, so any
-     * `day_exercise_id` fails here).
+     * set, or via `day_exercise_id` — a prescription that must belong to this
+     * session's own training day.
      */
     private function resolveExercise(TrainingSession $session, LogSetData $data): Exercise
     {
-        if ($data->exercise_id !== null) {
-            return Exercise::query()->where('uuid', $data->exercise_id)->firstOrFail();
+        if ($data->day_exercise_id !== null) {
+            $dayExercise = DayExercise::query()
+                ->with('exercise')
+                ->where('uuid', $data->day_exercise_id)
+                ->firstOrFail();
+
+            $this->ensurePrescriptionInSession($session, $dayExercise);
+
+            return $dayExercise->exercise;
         }
 
-        $dayExercise = DayExercise::query()
-            ->with('exercise')
-            ->where('uuid', $data->day_exercise_id)
-            ->firstOrFail();
+        return Exercise::query()->where('uuid', $data->exercise_id)->firstOrFail();
+    }
 
+    private function ensurePrescriptionInSession(TrainingSession $session, DayExercise $dayExercise): void
+    {
         throw_unless(
             $dayExercise->cycle_day_id === $session->cycle_day_id,
             new DayExerciseNotInSessionException,
         );
+    }
 
-        return $dayExercise->exercise;
+    /**
+     * Sets are appended in order, one sequence per exercise: the client must
+     * send exactly `(existing sets for the exercise) + 1`.
+     */
+    private function ensureSetNumberIsNext(TrainingSession $session, Exercise $exercise, int $setNumber): void
+    {
+        $expected = $session->sets()->where('exercise_id', $exercise->id)->count() + 1;
+
+        throw_unless($setNumber === $expected, new NonContiguousSetNumberException($expected));
     }
 }

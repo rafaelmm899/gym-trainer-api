@@ -13,7 +13,7 @@ final class SetLogUpdateAction
 {
     public function handle(TrainingSession $session, SetLog $set, UpdateSetLogData $data): SetLog
     {
-        throw_if($session->status === SessionStatus::Completed, new SessionAlreadyCompletedException);
+        $this->ensureSessionOpen($session);
 
         DB::transaction(fn (): bool => $set->update([
             'weight_kg' => $data->weight_kg,
@@ -23,5 +23,10 @@ final class SetLogUpdateAction
         ]));
 
         return $set->load('exercise');
+    }
+
+    private function ensureSessionOpen(TrainingSession $session): void
+    {
+        throw_if($session->status === SessionStatus::Completed, new SessionAlreadyCompletedException);
     }
 }
