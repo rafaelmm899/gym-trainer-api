@@ -52,7 +52,7 @@ return [
     'providers' => [
         'anthropic' => [
             'driver' => 'anthropic',
-            'key' => env('ANTHROPIC_API_KEY'),
+            'key' => env('AI_PROVIDER_API_KEY', env('ANTHROPIC_API_KEY')),
             'url' => env('ANTHROPIC_URL', 'https://api.anthropic.com/v1'),
             'models' => [
                 'text' => [
@@ -98,7 +98,7 @@ return [
 
         'gemini' => [
             'driver' => 'gemini',
-            'key' => env('GEMINI_API_KEY'),
+            'key' => env('AI_PROVIDER_API_KEY', env('GEMINI_API_KEY')),
             'url' => env('GEMINI_URL', 'https://generativelanguage.googleapis.com/v1beta/'),
             'models' => [
                 'text' => [
@@ -109,7 +109,7 @@ return [
 
         'groq' => [
             'driver' => 'groq',
-            'key' => env('GROQ_API_KEY'),
+            'key' => env('AI_PROVIDER_API_KEY', env('GROQ_API_KEY')),
             'models' => [
                 'text' => [
                     'default' => env('AI_PROVIDER_MODEL'),
@@ -135,7 +135,7 @@ return [
 
         'openai' => [
             'driver' => 'openai',
-            'key' => env('OPENAI_API_KEY'),
+            'key' => env('AI_PROVIDER_API_KEY', env('OPENAI_API_KEY')),
             'url' => env('OPENAI_URL', 'https://api.openai.com/v1'),
             'models' => [
                 'text' => [
