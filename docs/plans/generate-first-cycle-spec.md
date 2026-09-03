@@ -286,7 +286,7 @@ The onboarding precondition (the user must have an athlete profile) stays a
 |---|---|---|
 | `DB_DATABASE` | `gym_trainer_generate_first_cycle` (this worktree's `.env` only, during development) | Points the worktree at a clone of `gym_trainer` so the four new migrations never run against the shared database. Reverted on merge. |
 | `AI_PROVIDER` | `anthropic` (already in `.env.example`; unchanged) | `config('ai.default')` — the provider `CyclePlannerAgent` resolves. |
-| `ANTHROPIC_API_KEY` | already in `.env.example` (empty by default; unchanged) | Needed only for a live manual check; the Pest suite fakes the agent. |
+| `AI_PROVIDER_API_KEY` | `.env` only (per-provider keys `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / … still work as a fallback) | The active provider's key. Needed only for a live manual check; the Pest suite fakes the agent. |
 
 No new `.env.example` keys. `phpunit.xml` already sets `DB_CONNECTION=sqlite`,
 `DB_DATABASE=:memory:`, `QUEUE_CONNECTION=sync`, `SANCTUM_STATEFUL_DOMAINS`,
@@ -633,7 +633,7 @@ toolchain (`worktree-docker-tooling` memo).
 | 20 | Add the arch rules to `tests/Feature/ArchTest.php` (TC-35): `App\Services` final; `App\Ai\Agents` final. | `vendor/bin/pest tests/Feature/ArchTest.php` green; existing rules pass. |
 | 21 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then a final `php artisan ide-helper:models --write` + `vendor/bin/pint app/Models`. | Pint no diffs; PHPStan level 6 clean; model PHPDoc in sync with the migrations. |
 | 22 | `docker compose exec app composer check` (Pint `--test` + PHPStan + full Pest, incl. the reworked Routine suites, the new Cycle / Exercise suites, `DocsSecurityTest`, the arch rules). | All three green; no regression in Auth / Profile suites. |
-| 23 | Manual live check against `http://localhost:8000` with a real `ANTHROPIC_API_KEY` (not gating): `GET /sanctum/csrf-cookie` → register → login → `PUT /api/v1/profile` → `POST /api/v1/routines` → inspect the `201` (`data.cycle.days[].exercises[]` populated, `status: draft`) and the `cycles` / `cycle_days` / `day_exercises` rows; then force a failure (bad key) → `502 AI_GENERATION_FAILED`, `assertDatabaseCount('routines', 0)`; review `GET /docs/api` (nested `cycle` in the `201`, `502` listed). | The endpoint returns a coherent nested cycle from a real provider; the failure path returns `502` and persists nothing; Scramble shows the new shape. |
+| 23 | Manual live check against `http://localhost:8000` with a real `AI_PROVIDER_API_KEY` (not gating): `GET /sanctum/csrf-cookie` → register → login → `PUT /api/v1/profile` → `POST /api/v1/routines` → inspect the `201` (`data.cycle.days[].exercises[]` populated, `status: draft`) and the `cycles` / `cycle_days` / `day_exercises` rows; then force a failure (bad key) → `502 AI_GENERATION_FAILED`, `assertDatabaseCount('routines', 0)`; review `GET /docs/api` (nested `cycle` in the `201`, `502` listed). | The endpoint returns a coherent nested cycle from a real provider; the failure path returns `502` and persists nothing; Scramble shows the new shape. |
 | 24 | On merge / branch drop: `docker compose exec pgsql dropdb -U gym --if-exists gym_trainer_generate_first_cycle`; revert `DB_DATABASE` in the worktree `.env`. | The clone is gone; `.env` restored to `gym_trainer`. |
 
 *Process note: branch name, commit messages and PR text follow `CLAUDE.md` /
