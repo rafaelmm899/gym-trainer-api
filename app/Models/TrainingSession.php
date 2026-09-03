@@ -8,9 +8,11 @@ use App\Models\Concerns\HasPublicUuid;
 use Carbon\CarbonImmutable;
 use Database\Factories\TrainingSessionFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One training day the user actually executed — a day of the active cycle
@@ -33,6 +35,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property-read User $user
  * @property-read Routine $routine
  * @property-read CycleDay|null $cycleDay
+ * @property-read Collection<int, SetLog> $sets
+ * @property-read int|null $sets_count
  *
  * @method static \Database\Factories\TrainingSessionFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession newModelQuery()
@@ -109,5 +113,17 @@ class TrainingSession extends Model
     public function cycleDay(): BelongsTo
     {
         return $this->belongsTo(CycleDay::class);
+    }
+
+    /**
+     * The sets logged into this session. Named `sets` (not `setLogs`) so the
+     * `sessions/{session}/sets/{set}` route resolves `{set}` through it via
+     * scoped binding.
+     *
+     * @return HasMany<SetLog, $this>
+     */
+    public function sets(): HasMany
+    {
+        return $this->hasMany(SetLog::class, 'session_id');
     }
 }

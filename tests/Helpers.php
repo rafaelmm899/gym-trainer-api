@@ -5,6 +5,7 @@ use App\Models\Cycle;
 use App\Models\CycleDay;
 use App\Models\DayExercise;
 use App\Models\Routine;
+use App\Models\TrainingSession;
 use App\Models\User;
 
 /*
@@ -110,4 +111,30 @@ function trainingRoutineWithCycle(User $user): Routine
             ->create());
 
     return $routine->load('cycle.cycleDays');
+}
+
+/**
+ * An open (`in_progress`) session for the user, planned against the first day of
+ * a real active cycle — the fixture for logging sets against a prescription.
+ */
+function openPlannedSession(User $user): TrainingSession
+{
+    $routine = trainingRoutineWithCycle($user);
+
+    return TrainingSession::factory()->for($user)->for($routine)
+        ->planned($routine->cycle->cycleDays->first())
+        ->create()
+        ->load('cycleDay.dayExercises.exercise');
+}
+
+/**
+ * An open (`in_progress`) free session for the user — no cycle day, no
+ * prescription. Sets are logged into it with a direct `exercise_id`. Reuses the
+ * user's routine if they already have one (a user has a single active routine).
+ */
+function openFreeSession(User $user): TrainingSession
+{
+    $routine = $user->routines()->first() ?? Routine::factory()->for($user)->create();
+
+    return TrainingSession::factory()->for($user)->for($routine)->create();
 }
