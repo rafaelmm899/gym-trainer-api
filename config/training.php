@@ -18,7 +18,7 @@ return [
         'exercises_per_day' => [
             'beginner' => env('CYCLE_EXERCISES_PER_DAY_BEGINNER', '3-5'),
             'intermediate' => env('CYCLE_EXERCISES_PER_DAY_INTERMEDIATE', '4-6'),
-            'advanced' => env('CYCLE_EXERCISES_PER_DAY_ADVANCED', '5-8'),
+            'advanced' => env('CYCLE_EXERCISES_PER_DAY_ADVANCED', '6-8'),
         ],
     ],
 

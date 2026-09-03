@@ -1,5 +1,8 @@
 <?php
 
+use App\Models\Cycle;
+use App\Models\CycleDay;
+use App\Models\DayExercise;
 use App\Models\Routine;
 use App\Models\User;
 use Illuminate\Support\Str;
@@ -70,6 +73,46 @@ it('rejects an unauthenticated request', function () {
     $this->getJson("/api/v1/routines/{$routine->uuid}")
         ->assertUnauthorized()
         ->assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION');
+});
+
+// TC-14b
+it('embeds the full cycle tree, ordered, like the create response', function () {
+    $routine = Routine::factory()->for($this->user)->create();
+    $cycle = Cycle::factory()->for($routine)->create();
+
+    foreach ([2, 1] as $dayOrder) {
+        $day = CycleDay::factory()->for($cycle)->create(['order' => $dayOrder]);
+
+        foreach ([2, 1] as $exerciseOrder) {
+            DayExercise::factory()->for($day, 'cycleDay')->create(['order' => $exerciseOrder]);
+        }
+    }
+
+    $response = $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}")
+        ->assertOk()
+        ->assertJsonPath('data.cycle.id', $cycle->uuid)
+        ->assertJsonStructure([
+            'data' => [
+                'cycle' => [
+                    'id', 'sequence_number', 'status', 'split_rationale', 'generated_at',
+                    'days' => [
+                        '*' => [
+                            'id', 'order', 'label', 'focus_muscle_groups', 'rationale',
+                            'exercises' => [
+                                '*' => [
+                                    'id', 'order', 'name', 'sets', 'rep_min', 'rep_max',
+                                    'target_weight_kg', 'target_rpe', 'rest_seconds', 'rationale',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+    expect($response->json('data.cycle.days'))->toHaveCount(2)
+        ->and(array_column($response->json('data.cycle.days'), 'order'))->toBe([1, 2])
+        ->and(array_column($response->json('data.cycle.days.0.exercises'), 'order'))->toBe([1, 2]);
 });
 
 // TC-14

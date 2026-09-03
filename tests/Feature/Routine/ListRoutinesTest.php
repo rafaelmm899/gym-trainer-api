@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\Shared\Goal;
+use App\Models\Cycle;
 use App\Models\Routine;
 use App\Models\User;
 
@@ -99,6 +100,17 @@ it('rejects an unauthenticated request', function () {
     $this->getJson('/api/v1/routines')
         ->assertUnauthorized()
         ->assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION');
+});
+
+// TC-7b
+it('keeps each item bounded — no embedded cycle tree even when a cycle exists', function () {
+    $routine = Routine::factory()->for($this->user)->create();
+    Cycle::factory()->for($routine)->create();
+
+    $this->actingAs($this->user)->getJson('/api/v1/routines')
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonMissingPath('data.0.cycle');
 });
 
 // TC-7
