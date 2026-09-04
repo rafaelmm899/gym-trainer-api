@@ -10,6 +10,7 @@ use App\Http\Controllers\Profile\UpdateAthleteProfileController;
 use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
+use App\Http\Controllers\Session\CompleteTrainingSessionController;
 use App\Http\Controllers\Session\LogSetController;
 use App\Http\Controllers\Session\StoreTrainingSessionController;
 use App\Http\Controllers\Session\UpdateSetLogController;
@@ -64,4 +65,10 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('set')
         ->scopeBindings()
         ->name('sessions.sets.update');
+
+    // Complete a session: the Form Request delegates authorization to
+    // TrainingSessionPolicy::complete.
+    Route::post('sessions/{session}/complete', CompleteTrainingSessionController::class)
+        ->whereUuid('session')
+        ->name('sessions.complete');
 });
