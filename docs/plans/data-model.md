@@ -253,10 +253,14 @@ falla la sesión igual queda completada y la recomendación aparece al reintento
 | `started_at` | `timestamptz` | Cuándo se abrió la sesión. |
 | `completed_at` | `timestamptz` null | Cuándo se cerró. `null` mientras `in_progress`. |
 | `conversation_id` | `string(36)` FK → `agent_conversations` null | Conversación IA del análisis de esta sesión. Traza. |
+| `note` | `text` null | Nota general que el usuario deja al cerrar el día. Subjetiva, tal cual la envía el cliente. |
+| `perceived_effort` | `unsignedTinyInteger` 1–5, null | Esfuerzo percibido de toda la sesión. Subjetivo, **nunca** derivado de `set_logs` (peso/reps no alcanzan para estimarlo sin un 1RM conocido). |
 
 **Reglas**
 - Una sesión libre tiene `cycle_day_id = null` pero **siempre** `routine_id`.
 - `cycle_day_id` no es único: un mismo día del ciclo podría re-entrenarse.
+- `note` y `perceived_effort` solo se escriben al completar la sesión
+  (`POST /api/v1/sessions/{session}/complete`); ambos opcionales.
 
 ---
 

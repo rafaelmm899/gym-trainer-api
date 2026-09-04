@@ -21,6 +21,8 @@ class TrainingSessionResource extends JsonResource
             'id' => $this->uuid,
             'status' => $this->status->value,
             'analysis_state' => $this->analysis_state->value,
+            'note' => $this->note,
+            'perceived_effort' => $this->perceived_effort,
             'started_at' => $this->started_at->toIso8601String(),
             'completed_at' => $this->completed_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),

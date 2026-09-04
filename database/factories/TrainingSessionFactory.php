@@ -32,6 +32,8 @@ class TrainingSessionFactory extends Factory
             'analysis_state' => AnalysisState::Pending,
             'started_at' => now(),
             'completed_at' => null,
+            'note' => null,
+            'perceived_effort' => null,
         ];
     }
 

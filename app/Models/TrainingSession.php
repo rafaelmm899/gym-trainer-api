@@ -17,8 +17,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * One training day the user actually executed — a day of the active cycle
  * (`cycle_day_id` set) or a free, off-plan session (`cycle_day_id` null). Born
- * `in_progress` / `analysis_state = pending`; sets are logged into it and it is
- * closed by a later story.
+ * `in_progress` / `analysis_state = pending`; sets are logged into it, then it
+ * is closed with an optional note and perceived-effort rating.
  *
  * @property int $id
  * @property string $uuid
@@ -30,6 +30,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property CarbonImmutable $started_at
  * @property CarbonImmutable|null $completed_at
  * @property string|null $conversation_id
+ * @property string|null $note
+ * @property int|null $perceived_effort
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read User $user
@@ -48,6 +50,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereCreatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereCycleDayId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereNote($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession wherePerceivedEffort($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereRoutineId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereStartedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession whereStatus($value)
@@ -57,7 +61,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  *
  * @mixin \Eloquent
  */
-#[Fillable(['user_id', 'cycle_day_id', 'status', 'analysis_state', 'started_at', 'completed_at'])]
+#[Fillable(['user_id', 'cycle_day_id', 'status', 'analysis_state', 'started_at', 'completed_at', 'note', 'perceived_effort'])]
 class TrainingSession extends Model
 {
     /** @use HasFactory<TrainingSessionFactory> */
@@ -86,6 +90,7 @@ class TrainingSession extends Model
             'analysis_state' => AnalysisState::class,
             'started_at' => 'immutable_datetime',
             'completed_at' => 'immutable_datetime',
+            'perceived_effort' => 'integer',
         ];
     }
 
