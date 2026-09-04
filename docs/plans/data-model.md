@@ -11,7 +11,7 @@
   que aporten semántica. Las tablas expuestas por la API llevan además un `uuid`
   público — ver [Identificadores](#identificadores-id-interno--uuid-público).
 - **Sin soft deletes** en v1. El historial se conserva por estado
-  (`archived` / `completed` / `superseded`), no borrando filas.
+  (`archived` / `completed`), no borrando filas.
 - FKs con `ON DELETE CASCADE` cuando el hijo no tiene sentido sin el padre
   (`cycles` → `routines`, `set_logs` → `training_sessions`, …). `exercise_id` **nunca**
   cascadea: el catálogo es permanente.
@@ -58,7 +58,7 @@ Así la API no filtra el orden de creación ni el volumen de filas.
 | 1 | Grupos musculares | Enum fijo `MuscleGroup` (lista en [Enums](#enums)) |
 | 2 | `focus_muscle_groups` | `jsonb` (array de enum) en `cycle_days`, sin pivote |
 | 3 | Reps (prescripción y recomendación) | Rango `rep_min` / `rep_max` |
-| 4 | `confidence` | Enum `low` / `medium` / `high` |
+| 4 | Historial de recomendaciones | Sin `status`: una sola fila por `(user, routine, exercise)`, se actualiza (upsert) en cada análisis — decisión revisada en `session-analysis-spec.md` §9, ver nota en `exercise_recommendations` |
 | 5 | Dedupe de ejercicios | Solo log; sin tabla `exercise_aliases` en v1 |
 | 6 | Prescrito vs. real | Se deriva por `training_sessions.cycle_day_id`; sin FK extra en `set_logs` |
 
@@ -295,9 +295,9 @@ que consume la IA se calculan a partir de estas filas.
 **Qué almacena:** el objetivo que la IA sugiere para **la próxima vez que toque
 ese ejercicio**, acotado a `(usuario, rutina, ejercicio)` — cada rutina lleva
 sus propias recomendaciones. Se genera al cerrar una sesión y se va
-reemplazando: la anterior del mismo ejercicio pasa a `superseded`. Cuando una
-recomendación se usa para generar el ciclo N+1 **y ese ejercicio se entrenó** en
-el ciclo saliente, pasa a `applied`; si no se entrenó, sigue `active`.
+reemplazando: hay **una sola fila** por `(user_id, routine_id, exercise_id)`,
+que un análisis nuevo actualiza in-place (upsert) — sin `status`, sin
+histórico. Ver nota más abajo.
 
 | Columna | Tipo | Descripción |
 |---|---|---|
@@ -311,19 +311,21 @@ el ciclo saliente, pasa a `applied`; si no se entrenó, sigue `active`.
 | `target_rep_min` | `smallint` | Extremo inferior del rango de reps sugerido. |
 | `target_rep_max` | `smallint` | Extremo superior del rango de reps sugerido. |
 | `action` | `enum RecommendationAction` | Qué hacer: `advance_weight` / `hold` / `add_reps` / `add_set` / `deload` / `technique_focus`. |
-| `confidence` | `enum RecommendationConfidence` | `low` / `medium` / `high` — cuánta convicción tiene la IA, según cuántos datos había. |
 | `explanation` | `text` | Racional legible que se le muestra al usuario. |
-| `status` | `enum RecommendationStatus` | `active` (vigente) / `superseded` (reemplazada por una más nueva) / `applied` (ya se usó para generar un ciclo). |
 
 **Reglas**
-- Índice único parcial:
-  `(user_id, routine_id, exercise_id) WHERE status = 'active'` → una sola
-  recomendación vigente por ejercicio y rutina.
-- La generación del ciclo N+1 consume las `active` de la rutina, pero solo marca
-  `applied` las de **ejercicios entrenados** en el ciclo saliente. La
-  recomendación de un ejercicio prescrito pero no entrenado (0 series) **sigue
-  `active`** y se reutiliza en la siguiente ronda de planificación → su objetivo
-  se repite tal cual.
+- **Único** `(user_id, routine_id, exercise_id)` — un índice único normal, no
+  parcial: por diseño solo puede existir una fila por esa terna.
+- **Nota (revisado en `session-analysis-spec.md` §1/§9):** la versión original
+  de este documento proponía `status` (`active` / `superseded` / `applied`,
+  con índice único parcial) y `confidence` (`low`/`medium`/`high`). Ambos se
+  descartaron al construir la primera historia de este dominio ("Recibir
+  recomendaciones al cerrar el día", Order 130): el AC de esa historia solo
+  exige que la recomendación nueva *reemplace* a la anterior, algo que un
+  `updateOrCreate` sobre una fila única ya cumple sin guardar histórico. Si una
+  historia futura (p. ej. generar el ciclo N+1, Order 150) necesita distinguir
+  "usada en el último rollover" de "aún no usada", esa historia agrega el
+  campo que le haga falta entonces — no se construye por adelantado aquí.
 
 ---
 
@@ -337,7 +339,7 @@ expone como endpoint en v1.
 Incluye por ejercicio un flag **`performed`** (`true` / `false`): `false` cuando
 el ejercicio estaba prescrito en el ciclo saliente pero no tiene ninguna serie
 registrada. El planificador, ante `performed: false`, **mantiene el objetivo**
-(`action: hold`, mismos peso/series/reps, `confidence: low`) en vez de progresar
+(`action: hold`, mismos peso/series/reps) en vez de progresar
 sin datos.
 
 ---
@@ -365,8 +367,6 @@ sin datos.
 | `SessionStatus` | `App\Enums\Session\SessionStatus` | `in_progress`, `completed` |
 | `AnalysisState` | `App\Enums\Session\AnalysisState` | `pending`, `processing`, `done`, `failed` |
 | `RecommendationAction` | `App\Enums\Recommendation\RecommendationAction` | `advance_weight`, `hold`, `add_reps`, `add_set`, `deload`, `technique_focus` |
-| `RecommendationStatus` | `App\Enums\Recommendation\RecommendationStatus` | `active`, `superseded`, `applied` |
-| `RecommendationConfidence` | `App\Enums\Recommendation\RecommendationConfidence` | `low`, `medium`, `high` |
 
 Todos son enums PHP *backed* (string). El valor de la base es el `value` del
 caso; los `case` van en `TitleCase` (`Goal::Hypertrophy`).

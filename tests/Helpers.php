@@ -1,6 +1,7 @@
 <?php
 
 use App\Ai\Agents\Cycle\CyclePlannerAgent;
+use App\Ai\Agents\Recommendation\SessionAnalystAgent;
 use App\Models\Cycle;
 use App\Models\CycleDay;
 use App\Models\DayExercise;
@@ -91,6 +92,44 @@ function cyclePlanPayload(array $overrides = []): array
 function fakeCyclePlanner(array $overrides = []): void
 {
     CyclePlannerAgent::fake(fn (): array => cyclePlanPayload($overrides));
+}
+
+/**
+ * A well-formed structured payload for the AI session analyst: one
+ * recommendation. `array_replace_recursive` overrides let a test bend a field.
+ *
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function sessionAnalysisPayload(array $overrides = []): array
+{
+    return array_replace_recursive([
+        'recommendations' => [
+            [
+                'target_weight_kg' => 22.5,
+                'target_sets' => 4,
+                'target_rep_min' => 8,
+                'target_rep_max' => 10,
+                'action' => 'advance_weight',
+                'explanation' => 'Completed every set at the top of the rep range — add load next time.',
+            ],
+        ],
+    ], $overrides);
+}
+
+/**
+ * Fake the session analyst agent. With no `$responder`, returns exactly as
+ * many recommendations as the prompt lists exercises (`Exercise:` lines) — the
+ * agent must return one entry per exercise, in order — so a test that logs
+ * sets for more than one exercise doesn't need a bespoke fake.
+ */
+function fakeSessionAnalyst(?Closure $responder = null): void
+{
+    SessionAnalystAgent::fake($responder ?? function (string $prompt): array {
+        $count = max(1, substr_count($prompt, 'Exercise:'));
+
+        return ['recommendations' => array_fill(0, $count, sessionAnalysisPayload()['recommendations'][0])];
+    });
 }
 
 /**
