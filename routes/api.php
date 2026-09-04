@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\Exercise\ListExercisesController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
+use App\Http\Controllers\Recommendation\ListRoutineRecommendationsController;
 use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
@@ -45,6 +46,13 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('routine')
         ->can('view', 'routine')
         ->name('routines.show');
+
+    // Recommendations: same ownership gate as routines.show. Scoped to the
+    // routine's current cycle by RecommendationCatalogService.
+    Route::get('routines/{routine}/recommendations', ListRoutineRecommendationsController::class)
+        ->whereUuid('routine')
+        ->can('view', 'routine')
+        ->name('routines.recommendations.list');
 
     // Sessions: nested under the routine (bound by uuid). The Form Request
     // delegates authorization to TrainingSessionPolicy::create.
