@@ -69,6 +69,7 @@ it('completes with note and perceived_effort persisted and serialised', function
 
 // TC-3
 it('collapses a whitespace-only note to null', function () {
+    Bus::fake([SessionAnalysisJob::class]);
     $session = sessionWithOneSet($this->user);
 
     $this->actingAs($this->user)->postJson(completeUrl($session), ['note' => '   '])
@@ -138,7 +139,8 @@ it('reports already-completed before no-sets when both are true', function () {
 });
 
 // TC-9
-it('completes successfully even though the analysis job runs synchronously', function () {
+it('completes successfully without waiting for the analysis job', function () {
+    Bus::fake([SessionAnalysisJob::class]);
     $session = sessionWithOneSet($this->user);
 
     $this->actingAs($this->user)->postJson(completeUrl($session), [])
@@ -180,6 +182,7 @@ it('rejects an unauthenticated completion', function () {
 
 // TC-13
 it('exposes the full response shape with correct types', function () {
+    Bus::fake([SessionAnalysisJob::class]);
     $session = openPlannedSession($this->user);
     SetLog::factory()->for($session, 'session')->for(Exercise::factory())->create();
 

@@ -79,28 +79,23 @@ say — see §9 for the full list and rationale):
   recovery from there is `php artisan queue:retry` (or a future ticket), never
   a new client-facing action.
 - **Analysis failure must never undo the session close, nor fail the HTTP
-  response.** Investigated during this ticket's design (see §9 "Dispatching
-  after the transaction, not `ShouldQueueAfterCommit`"): under the `sync`
-  queue driver `phpunit.xml` configures for tests,
-  `SessionAnalysisJob::dispatch($session)` runs the job **inline**. Dispatching
-  it as the last line inside `SessionCloseAction`'s `DB::transaction` would let
-  a thrown analysis exception roll back the whole `complete` request, undoing
-  `status = completed` — confirmed by tracing `Illuminate\Queue\SyncQueue`. A
-  first fix attempt made the job `ShouldQueueAfterCommit` instead; empirically
-  this defers the rollback risk correctly, but `SyncQueue::handleException()`
-  still *rethrows* after calling the job's `failed()` hook, and nothing in
-  Laravel's transaction-commit-callback machinery catches that rethrow — the
-  exception still reached the HTTP response (verified by forcing a real,
-  unfaked provider failure end to end; see §9). The ticket instead moves the
-  dispatch call to **after** `SessionCloseAction`'s transaction closure returns
-  (so there is no open transaction left for a job exception to roll back) and
-  wraps that one dispatch call in a `try`/`catch (Throwable)` that intentionally
-  swallows it: the job's own `failed()` hook has already set
-  `analysis_state = failed` by the time `SyncQueue` rethrows, so there is
-  nothing left to do. Under a real queue connection, `dispatch()` only inserts
-  a `jobs` row and returns — it never runs `handle()` inline — so this
-  `catch` is inert in production; it exists only for the `sync` driver the test
-  suite uses.
+  response.** In production (`QUEUE_CONNECTION=database`) this is true by
+  construction and needs no defensive code: `SessionAnalysisJob::dispatch($session)`
+  only inserts a `jobs` row and returns immediately — `handle()` runs later, in
+  a fully separate `queue:work` process, with no way to affect the request that
+  closed the session. `SessionCloseAction` is **not modified** by this ticket;
+  it keeps dispatching as the last line inside its `DB::transaction`, exactly
+  as it already did.
+  A design detour is worth recording: `phpunit.xml` sets `QUEUE_CONNECTION=sync`
+  for tests, under which `dispatch()` runs the job **inline** — not actually
+  asynchronous at all, despite `ShouldQueue`. An early version of this ticket
+  changed `SessionCloseAction` (moving the dispatch after its transaction,
+  wrapped in a `try`/`catch`, briefly making the job `ShouldQueueAfterCommit`)
+  specifically to make a *sync-driver-only* failure mode behave under tests.
+  That is exactly backwards: a test-environment quirk was being fixed by adding
+  permanent complexity to production code. The corrected approach instead keeps
+  `SessionCloseAction` untouched and separates the two things tests were
+  conflating — see §9 "Test strategy: don't run the job through HTTP" and §8.
 
 **In scope:**
 
@@ -131,9 +126,7 @@ say — see §9 for the full list and rationale):
   (was an empty placeholder): sets `analysis_state = processing`, delegates to
   the Action. `$tries = 3`, `backoff()` returns `[30, 120]`, `failed(Throwable)`
   sets `analysis_state = failed`. Stays `ShouldQueue` (unchanged).
-- **`App\Actions\Session\SessionCloseAction`** — the dispatch call moves from
-  the last line inside its `DB::transaction` closure to right after that
-  transaction returns, wrapped in a `try`/`catch (Throwable)` — see §9.
+  `App\Actions\Session\SessionCloseAction` is **not modified** — see §1 / §9.
 - **`App\Data\Recommendation\ExerciseRecommendationData`** — the Service's
   per-exercise output DTO.
 - Test AI-fake helpers in `tests/Helpers.php`
@@ -141,9 +134,14 @@ say — see §9 for the full list and rationale):
   `fakeCyclePlanner()` / `cyclePlanPayload()`.
 - **`docs/plans/data-model.md`** — `exercise_recommendations` section, the
   Enums table, and the "Decisiones tomadas" table rewritten per §9.
-- Pest feature + unit coverage of every acceptance criterion, including the
-  "analysis fails, session stays completed" invariant against the real
-  (non-faked) job.
+- **Three existing `tests/Feature/Session/CompleteTrainingSessionTest.php`
+  cases gain `Bus::fake([SessionAnalysisJob::class])`** — see §9 "Test
+  strategy". They complete a session successfully without previously faking
+  the bus, which was harmless while the job was an empty placeholder; now that
+  it does real work, leaving them unfaked would make this endpoint's own test
+  file depend on a real (or fakeable-but-unfaked) AI call.
+- Pest unit coverage of `SessionAnalysisJob` (calling `handle()` / `failed()`
+  directly, not through HTTP) for every acceptance criterion.
 
 **Out of scope:**
 
@@ -191,7 +189,7 @@ No domain events. One existing queued job dispatch gains a real consumer:
 
 | Event name | Producer | Consumer | Payload | Trigger condition |
 |---|---|---|---|---|
-| `SessionAnalysisJob` dispatch (moved dispatch site) | `App\Actions\Session\SessionCloseAction` | `App\Jobs\Session\SessionAnalysisJob` (queue `database`; real `handle()`) | The completed `TrainingSession` (public property `session`) | Every successful `POST /api/v1/sessions/{session}/complete`, right after (not inside) the transaction that closes the session |
+| `SessionAnalysisJob` dispatch (unchanged dispatch site) | `App\Actions\Session\SessionCloseAction` | `App\Jobs\Session\SessionAnalysisJob` (queue `database`; real `handle()`) | The completed `TrainingSession` (public property `session`) | Every successful `POST /api/v1/sessions/{session}/complete`, as the last line inside the transaction that closes the session (unchanged from `complete-session-spec.md`) |
 
 ---
 
@@ -295,10 +293,11 @@ No change to `routes/api.php`, `config/ai.php`, `config/queue.php`,
 | Behavior | Current | New |
 |---|---|---|
 | `SessionAnalysisJob` | `implements ShouldQueue`; empty `handle()`. `analysis_state` stays `pending` forever. | Still `implements ShouldQueue`; real `handle(SessionAnalyzeAction)` moves `pending → processing → done`; `$tries = 3`, `backoff() = [30, 120]`; `failed()` moves to `failed` once retries are exhausted. |
-| `SessionCloseAction` dispatch site | `SessionAnalysisJob::dispatch($session)` is the last line inside the `DB::transaction` closure. | Moved to right after that transaction returns, wrapped in `try { ... } catch (Throwable) {}`. |
+| `SessionCloseAction` | Dispatches `SessionAnalysisJob::dispatch($session)` as the last line inside its `DB::transaction` closure. | Unchanged — see §1 / §9. |
 | Exercise recommendations | Do not exist — no table, no model. | `exercise_recommendations`: one row per `(user_id, routine_id, exercise_id)`, upserted by every analysis. |
 | AI usage | One agent (`CyclePlannerAgent`, cycle planning only). | Adds `SessionAnalystAgent` — one structured-output call per completed session, covering every exercise trained that day. |
-| Job execution vs. the closing transaction | Irrelevant — the placeholder `handle()` can't throw, so whether it runs inside or after `SessionCloseAction`'s transaction never mattered. | Matters now: dispatching after the transaction (not as its last line) means the session's `completed` row is already durably committed by the time the job can possibly throw, and the surrounding `try`/`catch` means that throw can never surface as an error response either. |
+| `tests/Feature/Session/CompleteTrainingSessionTest.php` | 3 of 13 cases complete a session without faking the bus (harmless — the placeholder `handle()` could never throw). | Those 3 gain `Bus::fake([SessionAnalysisJob::class])` — see §9. |
+| Testing `SessionAnalysisJob`'s own logic | No test exercised it (it was empty). | `tests/Unit/Session/SessionAnalysisJobTest.php` calls `handle()` / `failed()` directly — not through HTTP or a real dispatch. |
 | `docs/plans/data-model.md` §`exercise_recommendations` | Documents `status` (`active`/`superseded`/`applied`, partial unique index) and `confidence` (`low`/`medium`/`high`). | Both dropped; a plain unique `(user_id, routine_id, exercise_id)` replaces the partial index. |
 
 ---
@@ -306,10 +305,22 @@ No change to `routes/api.php`, `config/ai.php`, `config/queue.php`,
 ## 8. Test Cases
 
 Executable with Pest 4 on SQLite `:memory:` (`RefreshDatabase`, already
-wired). `QUEUE_CONNECTION=sync` (per `phpunit.xml`), so
-`SessionAnalysisJob::dispatch($session)` — called by `SessionCloseAction` right
-after its own transaction returns — runs inline, in the same request, no
-worker process needed in tests.
+wired).
+
+**Test strategy — the job is tested directly, not through HTTP.** Under
+`QUEUE_CONNECTION=sync` (`phpunit.xml`), `SessionAnalysisJob::dispatch($session)`
+runs the job **inline** — a `sync`-driver quirk, not real asynchrony (see §1 /
+§9). Rather than exploit that quirk to exercise the job through
+`POST .../complete` (which an early version of this ticket did, and which led
+to modifying `SessionCloseAction` just to keep that path safe under `sync`),
+every acceptance criterion below is tested by calling
+`(new SessionAnalysisJob($session))->handle(app(SessionAnalyzeAction::class))`
+/ `->failed($exception)` **directly** — exactly how a real queue worker invokes
+them, with no dependency on which queue driver happens to be configured. This
+keeps `SessionCloseAction` completely out of the picture: it is proven to
+dispatch the job by the **existing**, unchanged `Bus::fake()` assertions in
+`tests/Feature/Session/CompleteTrainingSessionTest.php` (three of which now
+also fake the bus for a case that used to complete for real — see §9).
 
 New helpers added to `tests/Helpers.php` (registered via
 `composer.json` `autoload-dev.files`, already listing this file):
@@ -345,61 +356,69 @@ function fakeSessionAnalyst(?Closure $responder = null): void
 }
 ```
 
-### `App\Jobs\Session\SessionAnalysisJob` (end to end) — `tests/Feature/Session/SessionAnalysisJobTest.php`
+### `App\Jobs\Session\SessionAnalysisJob` — `tests/Unit/Session/SessionAnalysisJobTest.php`
 
-**TC-1:** Completing a session with one trained exercise produces one recommendation (AC1, AC2)
+Calls `(new SessionAnalysisJob($session))->handle(app(SessionAnalyzeAction::class))`
+directly (a helper `runAnalysisJob(TrainingSession $session): void` wraps this
+one line) — the same call shape a real queue worker uses, without HTTP or a
+real dispatch. Needs the app + a real DB (`RefreshDatabase`), like
+`SessionCompletionServiceTest`.
+
+**TC-1:** Analyzing a session with one trained exercise produces one recommendation and moves `analysis_state` to `done` (AC1, AC2)
 - **Given:** `fakeSessionAnalyst()`; an authenticated user; `$session = openFreeSession($user)`; one `SetLog` logged for `$exercise = Exercise::factory()->create()`
-- **When:** `POST /api/v1/sessions/{$session->uuid}/complete` with `{}`
-- **Expect:** `200`; `assertDatabaseCount('exercise_recommendations', 1)`; the row has `user_id = $session->user_id`, `routine_id = $session->routine_id`, `exercise_id = $exercise->id`, `source_session_id = $session->id`; reloading `$session`, `analysis_state === 'done'`
+- **When:** `runAnalysisJob($session)`
+- **Expect:** `ExerciseRecommendation::query()->count() === 1`; the row has `user_id = $session->user_id`, `routine_id = $session->routine_id`, `exercise_id = $exercise->id`, `source_session_id = $session->id`; reloading `$session`, `analysis_state === AnalysisState::Done`
 
 **TC-2:** Every field of the recommendation matches the agent's structured output (AC2)
-- **Given:** `fakeSessionAnalyst(fn () => ['recommendations' => [['target_weight_kg' => 30.0, 'target_sets' => 5, 'target_rep_min' => 6, 'target_rep_max' => 8, 'action' => 'add_set', 'explanation' => 'Solid session — add a set.']]])`; a session with one set for one exercise
-- **When:** the session is completed
+- **Given:** `SessionAnalystAgent::fake(fn () => ['recommendations' => [['target_weight_kg' => 30.0, 'target_sets' => 5, 'target_rep_min' => 6, 'target_rep_max' => 8, 'action' => 'add_set', 'explanation' => 'Solid session — add a set.']]])`; a session with one set for one exercise
+- **When:** `runAnalysisJob($session)`
 - **Expect:** the `exercise_recommendations` row has `target_weight_kg == 30.0`, `target_sets === 5`, `target_rep_min === 6`, `target_rep_max === 8`, `action === 'add_set'`, `explanation === 'Solid session — add a set.'`
 
 **TC-3:** Multiple exercises trained in one session each get their own recommendation (product-context §5: one call per session, not per exercise)
 - **Given:** `fakeSessionAnalyst()`; a session with sets logged against three distinct exercises
-- **When:** the session is completed
-- **Expect:** `assertDatabaseCount('exercise_recommendations', 3)`, one row per exercise; `SessionAnalystAgent::assertPrompted(fn ($prompt) => substr_count($prompt->prompt, 'Exercise:') === 3)` (one call's prompt named all three — not one call per exercise; `laravel/ai` 0.6.8 has no call-count assertion, so the three-row count above plus this content check is the proof)
+- **When:** `runAnalysisJob($session)`
+- **Expect:** `ExerciseRecommendation::query()->count() === 3`, one row per exercise; `SessionAnalystAgent::assertPrompted(fn ($prompt) => substr_count($prompt->prompt, 'Exercise:') === 3)` (one call's prompt named all three — not one call per exercise; `laravel/ai` 0.6.8 has no call-count assertion, so the three-row count above plus this content check is the proof)
 
 **TC-4:** A new analysis replaces the previous recommendation for the same exercise in the same routine (AC3)
-- **Given:** an existing `ExerciseRecommendation` row for `(user, routine, exercise)` with `target_weight_kg = 20.0`; `fakeSessionAnalyst(fn () => ['recommendations' => [['target_weight_kg' => 22.5, 'target_sets' => 4, 'target_rep_min' => 8, 'target_rep_max' => 10, 'action' => 'advance_weight', 'explanation' => '...']]])`; a new session for the same user/routine with a set for that same exercise
-- **When:** the session is completed
-- **Expect:** `assertDatabaseCount('exercise_recommendations', 1)` (no new row — the existing one was updated); reloading it, `target_weight_kg == 22.5`
+- **Given:** an existing `ExerciseRecommendation` row for `(user, routine, exercise)` with `target_weight_kg = 20.0`; `SessionAnalystAgent::fake(fn () => ['recommendations' => [['target_weight_kg' => 22.5, 'target_sets' => 4, 'target_rep_min' => 8, 'target_rep_max' => 10, 'action' => 'advance_weight', 'explanation' => '...']]])`; a new session for the same user/routine with a set for that same exercise
+- **When:** `runAnalysisJob($session)`
+- **Expect:** `ExerciseRecommendation::query()->count() === 1` (no new row — the existing one was updated); reloading it, `target_weight_kg == 22.5`
 
 **TC-5:** The agent receives the previous recommendation as the comparison baseline, not the original cycle prescription (the curl-de-bíceps example from planning)
-- **Given:** a planned session (`openPlannedSession`) whose `cycle_day` prescribes an exercise at `sets=4, rep_min=10, rep_max=10, target_weight_kg=20.0`; an existing `ExerciseRecommendation` for that `(user, routine, exercise)` already at `target_weight_kg=22.5, target_rep_min=12, target_rep_max=12` (i.e. last time's suggested step-up); the user logs sets at `20kg × 11 reps`; `fakeSessionAnalyst(function (string $prompt) { ... })` capturing the prompt
-- **When:** the session is completed
-- **Expect:** the captured prompt text contains the *previous recommendation's* target (`22.5`, `12`) and does **not** present the original `day_exercise` prescription (`20.0` / `10`) as the baseline to compare against
+- **Given:** a planned session (`openPlannedSession`) whose `cycle_day` prescribes an exercise at `sets=4, rep_min=10, rep_max=10, target_weight_kg=20.0`; an existing `ExerciseRecommendation` for that `(user, routine, exercise)` already at `target_weight_kg=22.5, target_rep_min=12, target_rep_max=12` (i.e. last time's suggested step-up); the user logs sets at `20kg × 11 reps`; `fakeSessionAnalyst()`
+- **When:** `runAnalysisJob($session)`
+- **Expect:** `SessionAnalystAgent::assertPrompted(fn ($prompt) => str_contains($prompt->prompt, '22.50kg') && str_contains($prompt->prompt, '12-12 reps') && ! str_contains($prompt->prompt, 'original prescription'))` — the *previous recommendation's* target, not the original `day_exercise` prescription (`20.0` / `10`)
 
 **TC-6:** No previous recommendation and no `cycle_day` (free session, first time) — the agent decides from today's sets alone
-- **Given:** `fakeSessionAnalyst(function (string $prompt) { ... })`; `openFreeSession($user)` with sets logged for an exercise never trained before in this routine
-- **When:** the session is completed
-- **Expect:** `200`; exactly one `exercise_recommendations` row created; the captured prompt does not claim any prior target or prescription for that exercise (e.g. states it has no baseline)
+- **Given:** `fakeSessionAnalyst()`; `openFreeSession($user)` with sets logged for an exercise never trained before in this routine
+- **When:** `runAnalysisJob($session)`
+- **Expect:** exactly one `exercise_recommendations` row created; `SessionAnalystAgent::assertPrompted(fn ($prompt) => str_contains($prompt->prompt, 'No baseline'))`
 
 **TC-7:** A different routine's recommendation for the same exercise is untouched (routine scope, AC3 / product-context §2)
-- **Given:** the user has an `ExerciseRecommendation` for `exercise` under `$routineA` (`target_weight_kg = 40.0`); a session is opened and completed under a **different** routine `$routineB` with a set logged for the same `exercise`; `fakeSessionAnalyst()`
-- **When:** the session under `$routineB` is completed
-- **Expect:** `assertDatabaseCount('exercise_recommendations', 2)`; the `$routineA` row is unchanged (`target_weight_kg == 40.0`); a new row exists for `$routineB`
+- **Given:** the user has an `ExerciseRecommendation` for `exercise` under `$routineA`; `fakeSessionAnalyst()`; a session under a **different** routine `$routineB` with a set logged for the same `exercise`
+- **When:** `runAnalysisJob($sessionUnderRoutineB)`
+- **Expect:** `ExerciseRecommendation::query()->count() === 2`; the `$routineA` row is unchanged; a new row exists for `$routineB`
 
-**TC-8:** Analysis failure never undoes the session close — the real (non-faked) job (AC4)
-- **Given:** `App\Ai\Agents\Recommendation\SessionAnalystAgent::fake(fn () => throw new \RuntimeException('provider unavailable'))`; a session with one set
-- **When:** `POST .../complete` with `{}`
-- **Expect:** `200`; `data.status === 'completed'`; `assertDatabaseHas('training_sessions', ['id' => $session->id, 'status' => 'completed'])`; reloading the session, `analysis_state === 'failed'` (the `sync` driver runs the job exactly once — `SyncQueue` catches the exception, calls the job's `failed()` immediately, and rethrows; `$tries`/`backoff()` never engage under `sync`, they only take effect under a real worker on `database`/`redis` — see §9); `assertDatabaseCount('exercise_recommendations', 0)`
+**TC-8:** An agent failure propagates out of `handle()` as `SessionAnalysisException`, leaving `analysis_state` at `processing` (AC4)
+- **Given:** `SessionAnalystAgent::fake(fn () => throw new RuntimeException('provider unavailable'))`; a session with one set
+- **When:** `runAnalysisJob($session)`
+- **Expect:** throws `SessionAnalysisException`; reloading the session, `analysis_state === AnalysisState::Processing` (`handle()` itself never sets `failed` — only the job's `failed()` hook does that, tested separately in TC-10); no `exercise_recommendations` row
 
-**TC-9:** A malformed structured response also lands the session on `failed`, not `done` (AC4)
+**TC-9:** A malformed structured response propagates the same way (AC4)
 - **Given:** `SessionAnalystAgent::fake(fn () => ['recommendations' => []])` (wrong count — zero recommendations for one trained exercise); a session with one set
-- **When:** the session is completed
-- **Expect:** `200` (the HTTP request itself never sees this failure); reloading the session, `analysis_state === 'failed'`; no `exercise_recommendations` row
+- **When:** `runAnalysisJob($session)`
+- **Expect:** throws `SessionAnalysisException`; no `exercise_recommendations` row
 
-**TC-10:** A bare PHP `Error` (not an `Exception`) from the agent is caught too — `TypeError extends Error`, proving the dispatch-site `catch (Throwable)` in `SessionCloseAction` (and `SessionAnalystService`'s own `catch (Throwable $e)`) is not narrowed to "normal" exceptions
-- **Given:** `SessionAnalystAgent::fake(fn () => throw new TypeError('unexpected shape from provider'))`; a session with one set
-- **When:** `POST .../complete` with `{}`
-- **Expect:** `200`; `data.status === 'completed'`; reloading the session, `analysis_state === 'failed'`. This is a regression case for the bug found while implementing this spec: an earlier design (the job as `ShouldQueueAfterCommit`, dispatched from inside `SessionCloseAction`'s transaction) let *any* Throwable escaping the job propagate all the way to the HTTP response, regardless of its type — see §9.
+**TC-10:** `failed()` moves `analysis_state` to `failed` for any `Throwable`, not just `Exception` (AC4)
+- **Given:** two persisted sessions
+- **When:** `(new SessionAnalysisJob($session))->failed(new SessionAnalysisException)` on the first; `(new SessionAnalysisJob($otherSession))->failed(new TypeError('unexpected shape from provider'))` on the second — `TypeError extends Error`, not `Exception`, proving `failed(Throwable $exception)`'s type hint is not narrowed
+- **Expect:** both sessions reload with `analysis_state === AnalysisState::Failed`
 
 ### `App\Services\Recommendation\SessionAnalystService` — `tests/Unit/Recommendation/SessionAnalystServiceTest.php`
 
-Unit tier: these five call `SessionAnalystService::analyze()` directly (no HTTP), isolating the mapping/validation logic from the job/transaction machinery — mirrors the existing `SessionCompletionServiceTest` precedent. TC-1–TC-10 above are the entry-point tier, exercising the same scenarios through the real `POST .../complete` endpoint; the two tiers are complementary, not redundant.
+These five call `SessionAnalystService::analyze()` directly, isolating the
+mapping/validation logic from the job entirely — same tier and rationale as
+the `SessionAnalysisJob` tests above, one level further down the call stack.
 
 **TC-11:** `analyze()` throws `SessionAnalysisException` when the agent call itself fails
 - **Given:** `SessionAnalystAgent::fake(fn () => throw new \RuntimeException('boom'))`; a persisted session with one set
@@ -433,8 +452,9 @@ Unit tier: these five call `SessionAnalystService::analyze()` directly (no HTTP)
 | Decision area | What was decided | Why |
 |---|---|---|
 | Deviations from `data-model.md` | `exercise_recommendations` drops `status` (`RecommendationStatus`) and `confidence` (`RecommendationConfidence`) from the documented shape; keeps `target_rep_min` / `target_rep_max` as a range. Plain unique `(user_id, routine_id, exercise_id)` replaces the documented partial unique index. | Product-owner decisions this session (§1). `data-model.md`'s own header calls its table "Decisiones tomadas (por defecto, **ajustables**)" — this ticket is the adjustment, same precedent as `generate-first-cycle-spec.md`'s documented `jsonb`→`json` deviation. `docs/plans/data-model.md` is updated in this ticket's own scope (§4.1, §6), not left inconsistent. |
-| Dispatching after the transaction, not `ShouldQueueAfterCommit` | `SessionCloseAction` moves `SessionAnalysisJob::dispatch($session)` to right **after** its own `DB::transaction` closure returns (not as its last line), wrapped in `try { ... } catch (Throwable) {}`. `SessionAnalysisJob` stays plain `ShouldQueue`. | Traced through `Illuminate\Queue\SyncQueue::push()` (the driver `phpunit.xml` configures): a job dispatched mid-transaction under the plain `sync` driver runs **immediately, inline**, and on exception rethrows out of the dispatch call — which is the last line inside `SessionCloseAction`'s `DB::transaction` closure, so an analysis failure would roll back the whole `complete` request and undo `status = completed`, directly violating AC4. A first fix attempt made the job `ShouldQueueAfterCommit`: this correctly defers *execution* until the surrounding transaction commits (registering it as a `DatabaseTransactionsManager` commit callback — confirmed working even under `RefreshDatabase`'s wrapping test transaction, since `Illuminate\Foundation\Testing\DatabaseTransactionsManager::afterCommitCallbacksShouldBeExecuted()` fires callbacks at `$level === 1`, not needing the wrapper itself to commit), but it does **not** fix the whole problem: `Illuminate\Database\DatabaseTransactionRecord::executeCallbacks()` has no `try`/`catch` around the callbacks it runs, so `SyncQueue::handleException()`'s unconditional rethrow (after calling the job's `failed()` hook) still propagates all the way out of `Connection::commit()`, out of `DB::transaction()`, and into the HTTP response — verified empirically by forcing a real, unfaked agent failure (`docker run --network none`) end to end through `POST .../complete`: the request failed with an uncaught exception instead of returning `200`. Moving the dispatch to run **after** the transaction closure (so there is no open transaction left for a job exception to roll back) and wrapping just that one call in `try`/`catch (Throwable)` sidesteps the whole transaction-callback question: by the time `dispatch()` can throw, `session.status = completed` is already durably committed, and the job's own `failed()` hook has already set `analysis_state = failed` before `SyncQueue` rethrows — so the `catch` has nothing left to do but stop the rethrow from reaching the controller. Under a real queue connection, `dispatch()` only inserts a `jobs` row and returns (`handle()` never runs inline), so this `catch` is inert in production — the fix is scoped exactly to the `sync`-driver test scenario that exposes the gap. |
-| Job retry | `public int $tries = 3;` `public function backoff(): array { return [30, 120]; }` | First job in this codebase with real, failable work (`GenerateCycleJob` and the pre-this-ticket `SessionAnalysisJob` were empty stubs). Three attempts with a short-then-longer backoff absorbs a transient provider hiccup (timeout, rate limit) without hammering the API; `failed()` (reached only after all three) is the sole place `analysis_state` becomes `failed`. Under the `sync` driver, `SyncQueue::handleException()` calls `$job->fail()` and rethrows on the very first exception (no in-process retry loop — that only exists for a real worker pulling from a real queue), so TC-8/TC-9 land on `failed` after a single dispatch; this is a property of the `sync` driver, not a defect in `$tries`/`backoff()`, which take effect under `database`/`redis` in the real deployment. |
+| `SessionCloseAction` is not modified | Dispatch stays exactly as `complete-session-spec.md` shipped it: `SessionAnalysisJob::dispatch($session)` as the last line inside `SessionCloseAction`'s `DB::transaction`. `SessionAnalysisJob` stays plain `ShouldQueue`. | AC4 ("the session closes even if analysis fails") is true by construction in production: `QUEUE_CONNECTION=database` means `dispatch()` only inserts a `jobs` row and returns — `handle()` runs later, in a separate `queue:work` process, with no way to affect the request that closed the session. An earlier version of this ticket modified `SessionCloseAction` (moving the dispatch after its transaction, wrapping it in `try`/`catch`, briefly making the job `ShouldQueueAfterCommit`) to work around a failure mode that only exists under `QUEUE_CONNECTION=sync` — the driver `phpunit.xml` configures for tests, under which `dispatch()` runs the job **inline** (traced through `Illuminate\Queue\SyncQueue::push()`; confirmed by forcing a real, unfaked agent failure end to end through `POST .../complete` and watching the exception reach the HTTP response). That fix worked, but it added permanent production-code complexity to solve a test-environment-only quirk — backwards. The corrected approach leaves `SessionCloseAction` untouched and instead tests `SessionAnalysisJob` by calling `handle()`/`failed()` directly (§8), which needs no queue driver, real or `sync`, at all. |
+| Test strategy: don't run the job through HTTP | `tests/Unit/Session/SessionAnalysisJobTest.php` calls `(new SessionAnalysisJob($session))->handle(app(SessionAnalyzeAction::class))` / `->failed($exception)` directly, never through `POST .../complete`. Three cases in `tests/Feature/Session/CompleteTrainingSessionTest.php` that used to complete a session for real (harmless when the job was an empty placeholder) now add `Bus::fake([SessionAnalysisJob::class])`. | Testing the job through a real HTTP dispatch only works by exploiting the `sync` driver's inline-execution quirk, which is what motivated modifying `SessionCloseAction` in the first place (see the row above). Calling `handle()`/`failed()` directly exercises the exact same code a real queue worker runs, is queue-driver-agnostic, and keeps "does completing a session dispatch the job" (already covered by `Bus::assertDispatched` in `CompleteTrainingSessionTest.php`) cleanly separate from "does the job's own logic work" (this ticket's new coverage). |
+| Job retry | `public int $tries = 3;` `public function backoff(): array { return [30, 120]; }` | First job in this codebase with real, failable work (`GenerateCycleJob` and the pre-this-ticket `SessionAnalysisJob` were empty stubs). Three attempts with a short-then-longer backoff absorbs a transient provider hiccup (timeout, rate limit) without hammering the API. `handle()` itself never sets `failed` (TC-8/TC-9) — a real queue worker retries `handle()` up to `$tries` times per `backoff()` and only calls `failed()` once they're exhausted; `failed()` (TC-10) is the sole place `analysis_state` becomes `failed`. This retry loop is a real queue worker's job, not this ticket's code, so it is not itself under test — only that `handle()` propagates a failure (leaving `processing` for a worker to retry against) and that `failed()` correctly lands on `failed`. |
 | `SessionAnalysisException` extends `DomainException` despite never being rendered over HTTP | Kept in the exact shape of `CycleGenerationException` (`errorCode()`, `statusCode()`, `Throwable $previous`). | Consistency with the one other "Service wraps an AI agent, throws a typed exception on failure" precedent in this codebase; zero extra cost, and the "Ver las recomendaciones vigentes" (Order 140) ticket or any future synchronous re-analysis endpoint can reuse it without a rewrite. `statusCode()` is simply unused while nothing renders it. |
 | Where the Action lives | `App\Actions\Session\SessionAnalyzeAction`, not `App\Actions\Recommendation\...`. | Mirrors `RoutineCreateAction` living in `Routine` (not `Cycle`) despite writing `Cycle`-domain rows: the Action's identity follows the use case it orchestrates ("analyze a session"), not every table it touches. |
 | Where the AI Service/Agent live | `App\Services\Recommendation\SessionAnalystService` + `App\Ai\Agents\Recommendation\SessionAnalystAgent`, under `Recommendation`, not `Session`. | The Service's whole job is producing and validating `ExerciseRecommendation` data — that's `Recommendation`-domain business knowledge, independent of which Action calls it (mirrors `CyclePlannerService` sitting in `Cycle`, called from `RoutineCreateAction` in `Routine`). |
@@ -444,7 +464,7 @@ Unit tier: these five call `SessionAnalystService::analyze()` directly (no HTTP)
 | Numeric target fields are never nullable | `target_weight_kg`, `target_sets`, `target_rep_min`, `target_rep_max` are all required in the schema, the DTO, and the DB column. | `docs/product-context.md` §4 step 5 / the AC: the point of the recommendation is "a qué peso, series y reps encarar el próximo entrenamiento" — always a complete, usable prescription, regardless of `action`. For `technique_focus` or `hold`, the agent repeats the unchanged prior/baseline numbers rather than omitting them; `action` and `explanation` carry the qualitative nuance, not field nullability. |
 | Extra context passed to the agent | The session's own `note` / `perceived_effort`, and each `SetLog.note`, are included in the prompt alongside weight/reps/RPE. | Already-collected, low-cost signal; withholding it would contradict `docs/product-context.md` §5 ("100% IA... decide libremente"). |
 | Agent tuning | `#[Timeout(30)]`, `#[MaxTokens(2000)]` on `SessionAnalystAgent` (vs. `CyclePlannerAgent`'s `Timeout(60)` / `MaxTokens(7000)`). | A session-close analysis is far smaller than a 5-day plan — the AC itself says "puede tardar unos segundos". Even a busy 8-exercise session's worth of recommendations comfortably fits well under 2000 completion tokens, leaving headroom without inflating the worst-case latency budget the way the planner's 60 s does. |
-| Test job assertions | The end-to-end tests (`SessionAnalysisJobTest`) dispatch the real job through `POST .../complete` (no `Bus::fake`) and assert on `exercise_recommendations` rows + `analysis_state`, including one case (TC-10) that forces a real, unfaked failure rather than a scripted one; `CompleteTrainingSessionTest`'s own tests (`complete-session-spec.md`) keep using `Bus::fake([SessionAnalysisJob::class])` and are unchanged. | This ticket is exactly the "Order 130 owns all AI-fake coverage" future work `complete-session-spec.md` §9 flagged; that file's own tests intentionally stay job-agnostic. |
+| `SessionAnalysisJobTest` file location | `tests/Unit/Session/SessionAnalysisJobTest.php`, not `tests/Feature/`. | It never touches HTTP, routing, or auth — it constructs a `TrainingSession` via factories/helpers and calls `handle()`/`failed()` directly. It does need a real DB (`RefreshDatabase`), the same precedent `SessionCompletionServiceTest` already sets for a DB-touching Unit test. |
 | Git artifacts | English only. No AI attribution anywhere. | `CLAUDE.md` / `AGENTS.md` "Git" rule. |
 
 ---
@@ -468,11 +488,11 @@ from the main checkout; `pest` needs none of this (SQLite `:memory:`).
 | 7 | Create `app/Ai/Agents/Recommendation/SessionAnalystAgent.php` (`Agent`, `HasStructuredOutput`, `Promptable`, `#[Timeout(30)]`, `#[MaxTokens(2000)]`; `schema()` per §9's "Matching the AI response back to exercises" row) | Pint + PHPStan clean. |
 | 8 | Add `sessionAnalysisPayload()` / `fakeSessionAnalyst()` to `tests/Helpers.php` per §8 (needed by both this domain's Feature and Unit tests, added first so nothing downstream forward-references it); create `app/Services/Recommendation/SessionAnalystService.php`: `analyze(TrainingSession): array` — loads `sets.exercise` + `cycleDay.dayExercises`, resolves each distinct trained exercise's baseline (existing recommendation → day-exercise prescription → none), builds the prompt, invokes the agent, validates (count match, `rep_min <= rep_max`, known `action`, non-negative numerics) and maps to `ExerciseRecommendationData[]`, throwing `SessionAnalysisException` on any failure | Write `tests/Unit/Recommendation/SessionAnalystServiceTest.php` (TC-11…TC-15) — green. Pint + PHPStan clean. |
 | 9 | Create `app/Actions/Session/SessionAnalyzeAction.php`: `handle(TrainingSession): void` — calls the Service, then `DB::transaction` upserting each `ExerciseRecommendation` (`updateOrCreate` on `user_id`/`routine_id`/`exercise_id`) and setting `analysis_state = done` | Pint + PHPStan clean; covered by task 11's feature tests. |
-| 10 | Update `app/Jobs/Session/SessionAnalysisJob.php` (stays `ShouldQueue`): `public int $tries = 3;`; `backoff(): array` returns `[30, 120]`; `handle(SessionAnalyzeAction $action)` sets `analysis_state = processing` then calls `$action->handle($this->session)`; `failed(Throwable $exception): void` sets `analysis_state = failed`. Update `app/Actions/Session/SessionCloseAction.php`: move `SessionAnalysisJob::dispatch($session)` from the last line inside its `DB::transaction` closure to right after that closure returns, wrapped in `try { ... } catch (Throwable) {}` — see §9 | Pint + PHPStan clean; covered by task 11; existing `tests/Feature/Session/CompleteTrainingSessionTest.php` still green unmodified. |
-| 11 | Write `tests/Feature/Session/SessionAnalysisJobTest.php` (TC-1…TC-10), using the helpers added in task 8 | `vendor/bin/pest tests/Feature/Session/SessionAnalysisJobTest.php tests/Unit/Recommendation/SessionAnalystServiceTest.php` all green. |
+| 10 | Update `app/Jobs/Session/SessionAnalysisJob.php` (stays `ShouldQueue`): `public int $tries = 3;`; `backoff(): array` returns `[30, 120]`; `handle(SessionAnalyzeAction $action)` sets `analysis_state = processing` then calls `$action->handle($this->session)`; `failed(Throwable $exception): void` sets `analysis_state = failed`. **`app/Actions/Session/SessionCloseAction.php` is not touched** — see §9 | Pint + PHPStan clean; covered by task 11; `git diff` shows no changes to `SessionCloseAction.php`. |
+| 11 | Write `tests/Unit/Session/SessionAnalysisJobTest.php` (TC-1…TC-10 per §8, calling `handle()`/`failed()` directly), using the helpers added in task 8; add `Bus::fake([SessionAnalysisJob::class])` to the three `tests/Feature/Session/CompleteTrainingSessionTest.php` cases identified in §9 that complete a session for real (renaming the one whose description no longer fits) | `vendor/bin/pest tests/Unit/Session/SessionAnalysisJobTest.php tests/Unit/Recommendation/SessionAnalystServiceTest.php tests/Feature/Session/CompleteTrainingSessionTest.php` all green. |
 | 12 | Update `docs/plans/data-model.md` per §4.1 / §6: rewrite §`exercise_recommendations`, §Enums, "Decisiones tomadas" row #4, and the `confidence: low` mention under "Sin tabla: resumen de progresión" | The file reads coherently; no other section changed; no remaining reference to `RecommendationStatus` / `RecommendationConfidence`. |
 | 13 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse`, then `php artisan ide-helper:models --write` + `vendor/bin/pint app/Models` | Pint reports no diffs; PHPStan level 6 clean; `ExerciseRecommendation` PHPDoc in sync. |
-| 14 | `composer check` (Pint `--test` + PHPStan level 6 + full Pest suite) | All green; no regression in any other domain's suite, including `CompleteTrainingSessionTest` (unchanged, still `Bus::fake`s the job). |
+| 14 | `composer check` (Pint `--test` + PHPStan level 6 + full Pest suite) | All green; no regression in any other domain's suite. |
 | 15 | Manual check with `curl` against the worktree app pointed at the clone: register + login → create profile + routine → open a session → log a set → `POST .../complete` (`200`, `analysis_state: "pending"` in the immediate response, since the job runs after commit) → `GET`-equivalent check via `tinker` or a direct DB read of `exercise_recommendations` and the session's `analysis_state` (now `done`) | The row exists with sane AI-generated values; `analysis_state` reads `done` after the request completes. |
 | 16 | On merge / branch drop: `dropdb --if-exists gym_trainer_ia_recommendations`; revert `DB_DATABASE` in the worktree `.env` | The clone is gone; `.env` restored to `gym_trainer`. |
 

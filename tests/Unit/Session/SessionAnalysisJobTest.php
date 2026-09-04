@@ -1,47 +1,57 @@
 <?php
 
+use App\Actions\Session\SessionAnalyzeAction;
 use App\Ai\Agents\Recommendation\SessionAnalystAgent;
+use App\Enums\Session\AnalysisState;
+use App\Exceptions\Recommendation\SessionAnalysisException;
+use App\Jobs\Session\SessionAnalysisJob;
 use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
 use App\Models\SetLog;
 use App\Models\TrainingSession;
 use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
 
-beforeEach(function () {
-    $this->withHeader('Origin', config('app.url'));
-    $this->user = User::factory()->create();
-});
+// SessionAnalysisJob::handle() writes exercise_recommendations and moves
+// analysis_state, so this file (only) needs the app + a real DB — matches
+// SessionCompletionServiceTest. Dispatch itself (does completing a session
+// queue this job?) is covered separately by
+// tests/Feature/Session/CompleteTrainingSessionTest.php via Bus::fake() — this
+// file tests the job's own logic by calling handle()/failed() directly,
+// mirroring how a real queue worker invokes it, without going through HTTP or
+// a real dispatch.
+uses(TestCase::class, RefreshDatabase::class);
 
-function analysisCompleteUrl(TrainingSession $session): string
+function runAnalysisJob(TrainingSession $session): void
 {
-    return "/api/v1/sessions/{$session->uuid}/complete";
+    (new SessionAnalysisJob($session))->handle(app(SessionAnalyzeAction::class));
 }
 
 // TC-1
 it('produces one recommendation for a session with one trained exercise', function () {
     fakeSessionAnalyst();
 
+    $user = User::factory()->create();
     $exercise = Exercise::factory()->create();
-    $session = openFreeSession($this->user);
+    $session = openFreeSession($user);
     SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
 
-    $response = $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), []);
+    runAnalysisJob($session);
 
-    $response->assertOk();
-    $this->assertDatabaseCount('exercise_recommendations', 1);
-    $this->assertDatabaseHas('exercise_recommendations', [
-        'user_id' => $session->user_id,
-        'routine_id' => $session->routine_id,
-        'exercise_id' => $exercise->id,
-        'source_session_id' => $session->id,
-    ]);
-    expect($session->fresh()->analysis_state->value)->toBe('done');
+    expect($session->fresh()->analysis_state)->toBe(AnalysisState::Done);
+    expect(ExerciseRecommendation::query()->count())->toBe(1);
+    expect(ExerciseRecommendation::query()->firstOrFail())
+        ->user_id->toBe($session->user_id)
+        ->routine_id->toBe($session->routine_id)
+        ->exercise_id->toBe($exercise->id)
+        ->source_session_id->toBe($session->id);
 });
 
 // TC-2
 it('persists every field of the recommendation exactly as returned by the agent', function () {
-    fakeSessionAnalyst(fn () => ['recommendations' => [[
+    SessionAnalystAgent::fake(fn () => ['recommendations' => [[
         'target_weight_kg' => 30.0,
         'target_sets' => 5,
         'target_rep_min' => 6,
@@ -50,13 +60,14 @@ it('persists every field of the recommendation exactly as returned by the agent'
         'explanation' => 'Solid session — add a set.',
     ]]]);
 
+    $user = User::factory()->create();
     $exercise = Exercise::factory()->create();
-    $session = openFreeSession($this->user);
+    $session = openFreeSession($user);
     SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), [])->assertOk();
+    runAnalysisJob($session);
 
-    $recommendation = ExerciseRecommendation::query()->where('exercise_id', $exercise->id)->firstOrFail();
+    $recommendation = ExerciseRecommendation::query()->firstOrFail();
 
     expect((float) $recommendation->target_weight_kg)->toBe(30.0)
         ->and($recommendation->target_sets)->toBe(5)
@@ -70,32 +81,34 @@ it('persists every field of the recommendation exactly as returned by the agent'
 it('analyzes every exercise trained in one session with a single agent call', function () {
     fakeSessionAnalyst();
 
-    $session = openFreeSession($this->user);
+    $user = User::factory()->create();
+    $session = openFreeSession($user);
     $exercises = Exercise::factory()->count(3)->create();
 
     foreach ($exercises as $exercise) {
         SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
     }
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), [])->assertOk();
+    runAnalysisJob($session);
 
-    $this->assertDatabaseCount('exercise_recommendations', 3);
+    expect(ExerciseRecommendation::query()->count())->toBe(3);
     SessionAnalystAgent::assertPrompted(fn ($prompt) => substr_count($prompt->prompt, 'Exercise:') === 3);
 });
 
 // TC-4
 it('replaces the previous recommendation for the same exercise in the same routine', function () {
+    $user = User::factory()->create();
     $exercise = Exercise::factory()->create();
-    $routine = Routine::factory()->for($this->user)->create();
+    $routine = Routine::factory()->for($user)->create();
 
     ExerciseRecommendation::factory()->create([
-        'user_id' => $this->user->id,
+        'user_id' => $user->id,
         'routine_id' => $routine->id,
         'exercise_id' => $exercise->id,
         'target_weight_kg' => 20.0,
     ]);
 
-    fakeSessionAnalyst(fn () => ['recommendations' => [[
+    SessionAnalystAgent::fake(fn () => ['recommendations' => [[
         'target_weight_kg' => 22.5,
         'target_sets' => 4,
         'target_rep_min' => 8,
@@ -104,24 +117,25 @@ it('replaces the previous recommendation for the same exercise in the same routi
         'explanation' => 'Progressing.',
     ]]]);
 
-    $session = TrainingSession::factory()->for($this->user)->for($routine)->create();
+    $session = TrainingSession::factory()->for($user)->for($routine)->create();
     SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), [])->assertOk();
+    runAnalysisJob($session);
 
-    $this->assertDatabaseCount('exercise_recommendations', 1);
+    expect(ExerciseRecommendation::query()->count())->toBe(1);
     expect((float) ExerciseRecommendation::query()->firstOrFail()->target_weight_kg)->toBe(22.5);
 });
 
 // TC-5
 it('gives the agent the previous recommendation as the baseline, not the original cycle prescription', function () {
-    $session = openPlannedSession($this->user);
+    $user = User::factory()->create();
+    $session = openPlannedSession($user);
     $dayExercise = $session->cycleDay->dayExercises->first();
     $exercise = $dayExercise->exercise;
     $dayExercise->update(['sets' => 4, 'rep_min' => 10, 'rep_max' => 10, 'target_weight_kg' => 20.0]);
 
     ExerciseRecommendation::factory()->create([
-        'user_id' => $this->user->id,
+        'user_id' => $user->id,
         'routine_id' => $session->routine_id,
         'exercise_id' => $exercise->id,
         'target_weight_kg' => 22.5,
@@ -132,7 +146,7 @@ it('gives the agent the previous recommendation as the baseline, not the origina
     fakeSessionAnalyst();
     SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1, 'weight_kg' => 20.0, 'reps' => 11]);
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), [])->assertOk();
+    runAnalysisJob($session);
 
     SessionAnalystAgent::assertPrompted(function ($prompt) {
         $text = $prompt->prompt;
@@ -146,23 +160,25 @@ it('gives the agent the previous recommendation as the baseline, not the origina
 it('has the agent decide from sets alone when there is no recommendation and no cycle_day', function () {
     fakeSessionAnalyst();
 
+    $user = User::factory()->create();
     $exercise = Exercise::factory()->create();
-    $session = openFreeSession($this->user);
+    $session = openFreeSession($user);
     SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), [])->assertOk();
+    runAnalysisJob($session);
 
-    $this->assertDatabaseCount('exercise_recommendations', 1);
+    expect(ExerciseRecommendation::query()->count())->toBe(1);
     SessionAnalystAgent::assertPrompted(fn ($prompt) => str_contains($prompt->prompt, 'No baseline'));
 });
 
 // TC-7
 it('leaves a different routine\'s recommendation for the same exercise untouched', function () {
+    $user = User::factory()->create();
     $exercise = Exercise::factory()->create();
-    $routineA = Routine::factory()->for($this->user)->archived()->create();
+    $routineA = Routine::factory()->for($user)->archived()->create();
 
     ExerciseRecommendation::factory()->create([
-        'user_id' => $this->user->id,
+        'user_id' => $user->id,
         'routine_id' => $routineA->id,
         'exercise_id' => $exercise->id,
         'target_weight_kg' => 40.0,
@@ -170,58 +186,55 @@ it('leaves a different routine\'s recommendation for the same exercise untouched
 
     fakeSessionAnalyst();
 
-    $routineB = Routine::factory()->for($this->user)->create();
-    $sessionB = TrainingSession::factory()->for($this->user)->for($routineB)->create();
+    $routineB = Routine::factory()->for($user)->create();
+    $sessionB = TrainingSession::factory()->for($user)->for($routineB)->create();
     SetLog::factory()->for($sessionB, 'session')->for($exercise, 'exercise')->create(['set_number' => 1]);
 
-    $this->actingAs($this->user)->postJson(analysisCompleteUrl($sessionB), [])->assertOk();
+    runAnalysisJob($sessionB);
 
-    $this->assertDatabaseCount('exercise_recommendations', 2);
+    expect(ExerciseRecommendation::query()->count())->toBe(2);
     expect((float) ExerciseRecommendation::query()->where('routine_id', $routineA->id)->firstOrFail()->target_weight_kg)->toBe(40.0);
 });
 
 // TC-8
-it('never undoes the session close when the agent fails on every retry', function () {
+it('lets an agent failure propagate out of handle(), leaving analysis_state at processing', function () {
     SessionAnalystAgent::fake(fn () => throw new RuntimeException('provider unavailable'));
 
-    $session = openFreeSession($this->user);
+    $user = User::factory()->create();
+    $session = openFreeSession($user);
     SetLog::factory()->for($session, 'session')->for(Exercise::factory())->create(['set_number' => 1]);
 
-    $response = $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), []);
+    expect(fn () => runAnalysisJob($session))->toThrow(SessionAnalysisException::class);
 
-    $response->assertOk()->assertJsonPath('data.status', 'completed');
-    $this->assertDatabaseHas('training_sessions', ['id' => $session->id, 'status' => 'completed']);
-    expect($session->fresh()->analysis_state->value)->toBe('failed');
-    $this->assertDatabaseCount('exercise_recommendations', 0);
+    // handle() itself never sets `failed` — only the job's failed() hook does,
+    // which a real queue worker calls once retries are exhausted (TC-10).
+    expect($session->fresh()->analysis_state)->toBe(AnalysisState::Processing);
+    expect(ExerciseRecommendation::query()->count())->toBe(0);
 });
 
 // TC-9
-it('lands on failed, not done, when the structured response has the wrong count', function () {
+it('propagates a malformed structured response as SessionAnalysisException too', function () {
     SessionAnalystAgent::fake(fn () => ['recommendations' => []]);
 
-    $session = openFreeSession($this->user);
+    $user = User::factory()->create();
+    $session = openFreeSession($user);
     SetLog::factory()->for($session, 'session')->for(Exercise::factory())->create(['set_number' => 1]);
 
-    $response = $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), []);
-
-    $response->assertOk();
-    expect($session->fresh()->analysis_state->value)->toBe('failed');
-    $this->assertDatabaseCount('exercise_recommendations', 0);
+    expect(fn () => runAnalysisJob($session))->toThrow(SessionAnalysisException::class);
+    expect(ExerciseRecommendation::query()->count())->toBe(0);
 });
 
 // TC-10
-it('catches a bare PHP Error from the analyst, not just an Exception', function () {
-    // TypeError extends Error, not Exception — proves SessionCloseAction's
-    // dispatch-site catch (and SyncQueue's own handling) is not narrowed to
-    // "normal" exceptions. This is the scenario that would have broken the
-    // request under the earlier ShouldQueueAfterCommit design (see §9).
-    SessionAnalystAgent::fake(fn () => throw new TypeError('unexpected shape from provider'));
+it('failed() moves analysis_state to failed for any Throwable, not just Exception', function () {
+    $user = User::factory()->create();
+    $session = openFreeSession($user);
 
-    $session = openFreeSession($this->user);
-    SetLog::factory()->for($session, 'session')->for(Exercise::factory())->create(['set_number' => 1]);
+    (new SessionAnalysisJob($session))->failed(new SessionAnalysisException);
+    expect($session->fresh()->analysis_state)->toBe(AnalysisState::Failed);
 
-    $response = $this->actingAs($this->user)->postJson(analysisCompleteUrl($session), []);
-
-    $response->assertOk()->assertJsonPath('data.status', 'completed');
-    expect($session->fresh()->analysis_state->value)->toBe('failed');
+    // TypeError extends Error, not Exception — the job's failed(Throwable
+    // $exception) signature must accept it too.
+    $otherSession = openFreeSession(User::factory()->create());
+    (new SessionAnalysisJob($otherSession))->failed(new TypeError('unexpected shape from provider'));
+    expect($otherSession->fresh()->analysis_state)->toBe(AnalysisState::Failed);
 });
