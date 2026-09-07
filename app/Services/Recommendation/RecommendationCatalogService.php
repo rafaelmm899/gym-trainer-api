@@ -2,6 +2,7 @@
 
 namespace App\Services\Recommendation;
 
+use App\Enums\Recommendation\RecommendationStatus;
 use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
@@ -10,9 +11,9 @@ use Illuminate\Database\Eloquent\Collection;
 final class RecommendationCatalogService
 {
     /**
-     * The routine's recommendations for exercises still present in its
-     * current cycle. A recommendation left over for an exercise dropped in a
-     * later cycle is excluded.
+     * The routine's `active` recommendations for exercises still present in
+     * its current cycle. Excluded: a recommendation left over for an exercise
+     * dropped in a later cycle, and one already `applied` by a cycle rollover.
      *
      * @return Collection<int, ExerciseRecommendation>
      */
@@ -28,6 +29,7 @@ final class RecommendationCatalogService
             ->pluck('exercise_id');
 
         return ExerciseRecommendation::where('routine_id', $routine->id)
+            ->where('status', RecommendationStatus::Active)
             ->whereIn('exercise_id', $exerciseIds)
             ->with('exercise')
             ->get()

@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\CurrentUserController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Auth\RegisterController;
+use App\Http\Controllers\Cycle\GenerateCycleController;
 use App\Http\Controllers\Exercise\ListExercisesController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
@@ -53,6 +54,16 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('routine')
         ->can('view', 'routine')
         ->name('routines.recommendations.list');
+
+    // Generate cycle N+1, synchronously and all-or-nothing (same shape as
+    // routines.store). RoutinePolicy::generateCycle gates ownership; whether
+    // the routine is active is a business guard inside the Action (409), not
+    // this Policy. throttle:1,1 — the AI call runs in-request.
+    Route::post('routines/{routine}/cycles', GenerateCycleController::class)
+        ->whereUuid('routine')
+        ->middleware('throttle:1,1')
+        ->can('generateCycle', 'routine')
+        ->name('routines.cycles.store');
 
     // Sessions: nested under the routine (bound by uuid). The Form Request
     // delegates authorization to TrainingSessionPolicy::create.

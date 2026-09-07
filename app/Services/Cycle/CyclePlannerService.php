@@ -6,22 +6,27 @@ use App\Ai\Agents\Cycle\CyclePlannerAgent;
 use App\Data\Cycle\CyclePlanData;
 use App\Data\Cycle\CyclePlanDayData;
 use App\Data\Cycle\CyclePlanExerciseData;
+use App\Data\Cycle\ExerciseProgressionData;
 use App\Enums\Profile\ExperienceLevel;
 use App\Enums\Shared\Goal;
 use App\Enums\Shared\MuscleGroup;
 use App\Exceptions\Cycle\CycleGenerationException;
 use App\Models\AthleteProfile;
+use App\Models\ExerciseRecommendation;
+use Illuminate\Support\Collection;
 use Laravel\Ai\Responses\StructuredAgentResponse;
 use Throwable;
 
 /**
- * Wraps {@see CyclePlannerAgent}: builds the planning prompt from the athlete
- * profile plus the routine's goal and hint, invokes the agent, checks the
- * structured response is a usable 5-day plan, and maps it to {@see CyclePlanData}.
+ * Wraps {@see CyclePlannerAgent}: builds the planning prompt — from the
+ * athlete profile plus the routine's goal and hint for the first cycle, or
+ * additionally the routine's active recommendations and a progression
+ * summary for cycle N+1 — invokes the agent, checks the structured response
+ * is a usable 5-day plan, and maps it to {@see CyclePlanData}.
  *
  * Every failure — a provider error or an out-of-bounds response — surfaces as
  * {@see CycleGenerationException}. It runs before any database write, so a
- * failure means the routine is never created.
+ * failure means nothing is persisted (neither the first cycle nor a rollover).
  */
 final class CyclePlannerService
 {
@@ -31,10 +36,44 @@ final class CyclePlannerService
     {
         [$minExercises, $maxExercises] = $this->exercisesPerDayRange($profile->experience_level);
 
+        $structured = $this->promptAgent($this->buildPrompt($profile, $goal, $hint, $minExercises, $maxExercises));
+
+        return $this->mapPlan($structured, $minExercises, $maxExercises);
+    }
+
+    /**
+     * @param  Collection<int, ExerciseRecommendation>  $recommendations  the routine's `active` recommendations, with `exercise` eager-loaded
+     * @param  array<int, ExerciseProgressionData>  $progressionSummary  keyed by exercise id, from {@see ProgressionSummaryService}
+     */
+    public function planNextCycle(
+        AthleteProfile $profile,
+        Goal $goal,
+        ?string $hint,
+        Collection $recommendations,
+        array $progressionSummary,
+    ): CyclePlanData {
+        [$minExercises, $maxExercises] = $this->exercisesPerDayRange($profile->experience_level);
+
+        $structured = $this->promptAgent($this->buildNextCyclePrompt(
+            $profile,
+            $goal,
+            $hint,
+            $minExercises,
+            $maxExercises,
+            $recommendations,
+            $progressionSummary,
+        ));
+
+        return $this->mapPlan($structured, $minExercises, $maxExercises);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function promptAgent(string $prompt): array
+    {
         try {
-            $response = CyclePlannerAgent::make()->prompt(
-                $this->buildPrompt($profile, $goal, $hint, $minExercises, $maxExercises)
-            );
+            $response = CyclePlannerAgent::make()->prompt($prompt);
         } catch (Throwable $e) {
             throw new CycleGenerationException(previous: $e);
         }
@@ -43,7 +82,7 @@ final class CyclePlannerService
             throw new CycleGenerationException('The planner did not return a structured plan.');
         }
 
-        return $this->mapPlan($response->toArray(), $minExercises, $maxExercises);
+        return $response->toArray();
     }
 
     /**
@@ -69,6 +108,62 @@ final class CyclePlannerService
         $lines = [
             'Build the first training week for this athlete.',
             '',
+            ...$this->athleteAndRoutineLines($profile, $goal, $hint, $minExercises, $maxExercises),
+        ];
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param  Collection<int, ExerciseRecommendation>  $recommendations
+     * @param  array<int, ExerciseProgressionData>  $progressionSummary
+     */
+    private function buildNextCyclePrompt(
+        AthleteProfile $profile,
+        Goal $goal,
+        ?string $hint,
+        int $minExercises,
+        int $maxExercises,
+        Collection $recommendations,
+        array $progressionSummary,
+    ): string {
+        $lines = [
+            'Build the next training week for this athlete, continuing their existing program.',
+            '',
+            ...$this->athleteAndRoutineLines($profile, $goal, $hint, $minExercises, $maxExercises),
+        ];
+
+        if ($recommendations->isNotEmpty()) {
+            $lines[] = '';
+            $lines[] = 'Active recommendations:';
+
+            foreach ($recommendations as $recommendation) {
+                $lines[] = $this->recommendationLine($recommendation);
+            }
+        }
+
+        if ($progressionSummary !== []) {
+            $lines[] = '';
+            $lines[] = 'Progression summary:';
+
+            foreach ($progressionSummary as $entry) {
+                $lines[] = $this->progressionLine($entry);
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * The athlete-profile / routine-goal-and-hint block shared by the first
+     * cycle and cycle N+1 prompts, plus the shared day-count / exercise-count
+     * instructions.
+     *
+     * @return list<string>
+     */
+    private function athleteAndRoutineLines(AthleteProfile $profile, Goal $goal, ?string $hint, int $minExercises, int $maxExercises): array
+    {
+        $lines = [
             'Athlete profile:',
             "- Experience level: {$profile->experience_level->value}",
             "- Available days per week: {$profile->days_per_week}",
@@ -94,7 +189,44 @@ final class CyclePlannerService
         $lines[] = 'Pick ONE count in that range and use it on all 5 days — a day with fewer '
             ."than {$minExercises} exercises makes the whole plan invalid.";
 
-        return implode("\n", $lines);
+        return $lines;
+    }
+
+    private function recommendationLine(ExerciseRecommendation $recommendation): string
+    {
+        return sprintf(
+            '- %s: %.2fkg, %dx%d-%d, action: %s — %s',
+            $recommendation->exercise->name,
+            $recommendation->target_weight_kg,
+            $recommendation->target_sets,
+            $recommendation->target_rep_min,
+            $recommendation->target_rep_max,
+            $recommendation->action->value,
+            $recommendation->explanation,
+        );
+    }
+
+    /**
+     * A `performed: no` line ends with the literal instruction "no data —
+     * keep the current target" — the marker {@see CyclePlannerService}
+     * tests assert on verbatim, so the planner never invents a target for an
+     * exercise with no real data this outgoing week.
+     */
+    private function progressionLine(ExerciseProgressionData $entry): string
+    {
+        $prescribed = sprintf('%dx%d-%d', $entry->prescribedSets, $entry->prescribedRepMin, $entry->prescribedRepMax);
+        $prescribed .= $entry->prescribedWeightKg !== null ? sprintf(' at %.2fkg', $entry->prescribedWeightKg) : '';
+
+        if (! $entry->performed) {
+            return "- {$entry->exerciseName}: prescribed {$prescribed}, performed: no — no data — keep the current target.";
+        }
+
+        $actual = sprintf('%.2fkg avg x %.1f reps', $entry->actualAvgWeightKg, $entry->actualAvgReps);
+        $actual .= $entry->actualMaxRpe !== null ? sprintf(' (max RPE %.1f)', $entry->actualMaxRpe) : '';
+
+        $plateau = $entry->plateauSignal ? ', plateau signal' : '';
+
+        return "- {$entry->exerciseName}: prescribed {$prescribed}, performed: yes, actual {$actual}, trend: {$entry->trend}{$plateau}.";
     }
 
     /**

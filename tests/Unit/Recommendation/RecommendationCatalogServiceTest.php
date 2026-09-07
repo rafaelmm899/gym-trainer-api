@@ -58,3 +58,19 @@ it('returns an empty collection when the routine has no current cycle', function
 
     expect($result)->toHaveCount(0);
 });
+
+// TC-32
+it('excludes an applied recommendation', function () {
+    $routine = Routine::factory()->create();
+    $exercise = Exercise::factory()->create();
+
+    $cycle = Cycle::factory()->for($routine)->create();
+    $day = CycleDay::factory()->for($cycle)->create();
+    DayExercise::factory()->for($day, 'cycleDay')->for($exercise)->create();
+
+    ExerciseRecommendation::factory()->applied()->for($routine)->for($exercise)->create();
+
+    $result = app(RecommendationCatalogService::class)->listCurrentForRoutine($routine);
+
+    expect($result)->toHaveCount(0);
+});

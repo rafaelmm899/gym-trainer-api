@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\Recommendation\RecommendationAction;
+use App\Enums\Recommendation\RecommendationStatus;
 use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
@@ -30,6 +31,14 @@ class ExerciseRecommendationFactory extends Factory
             'target_rep_max' => 12,
             'action' => RecommendationAction::Hold,
             'explanation' => fake()->sentence(),
+            'status' => RecommendationStatus::Active,
         ];
+    }
+
+    public function applied(): static
+    {
+        return $this->state(fn (): array => [
+            'status' => RecommendationStatus::Applied,
+        ]);
     }
 }

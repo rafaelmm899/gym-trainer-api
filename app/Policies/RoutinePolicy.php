@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Exceptions\Cycle\RoutineNotActiveException;
 use App\Models\Routine;
 use App\Models\User;
 
@@ -26,6 +27,17 @@ class RoutinePolicy
      * this check, a foreign one a 403 here.
      */
     public function view(User $user, Routine $routine): bool
+    {
+        return $routine->user_id === $user->id;
+    }
+
+    /**
+     * A cycle can only be generated for a routine the caller owns. Whether
+     * that routine is currently `active` is a business guard
+     * ({@see RoutineNotActiveException}, 409), not an
+     * authorization concern.
+     */
+    public function generateCycle(User $user, Routine $routine): bool
     {
         return $routine->user_id === $user->id;
     }

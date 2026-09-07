@@ -7,6 +7,8 @@ use App\Models\DayExercise;
 use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
+use App\Models\SetLog;
+use App\Models\TrainingSession;
 use App\Models\User;
 use Illuminate\Support\Str;
 
@@ -144,6 +146,40 @@ it('rejects an unauthenticated request', function () {
     $this->getJson("/api/v1/routines/{$routine->uuid}/recommendations")
         ->assertUnauthorized()
         ->assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION');
+});
+
+// TC-33
+it('excludes an applied recommendation from the response', function () {
+    $exercise = Exercise::factory()->create();
+    $routine = routineWithCurrentCycleExercises($this->user, [$exercise]);
+    ExerciseRecommendation::factory()->applied()->for($this->user)->for($routine)->for($exercise)->create();
+
+    $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}/recommendations")
+        ->assertOk()
+        ->assertJsonCount(0, 'data');
+});
+
+// TC-34
+it('re-activates a recommendation on a new session analysis after it was applied', function () {
+    $exercise = Exercise::factory()->create();
+    $routine = Routine::factory()->for($this->user)->create();
+    $cycle = Cycle::factory()->active()->for($routine)->create();
+    $day = CycleDay::factory()->for($cycle)->create();
+    DayExercise::factory()->for($day, 'cycleDay')->for($exercise)->create();
+
+    $recommendation = ExerciseRecommendation::factory()->applied()->for($this->user)->for($routine)->for($exercise)->create();
+
+    fakeSessionAnalyst();
+    $session = TrainingSession::factory()->for($this->user)->for($routine)->planned($day)->create();
+    SetLog::factory()->for($session, 'session')->for($exercise, 'exercise')->create();
+
+    $this->actingAs($this->user)->postJson("/api/v1/sessions/{$session->uuid}/complete")->assertOk();
+
+    expect($recommendation->refresh()->status->value)->toBe('active');
+
+    $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}/recommendations")
+        ->assertOk()
+        ->assertJsonCount(1, 'data');
 });
 
 // TC-9

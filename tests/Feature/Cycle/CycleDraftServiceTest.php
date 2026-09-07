@@ -4,6 +4,7 @@ use App\Data\Cycle\CyclePlanData;
 use App\Enums\Cycle\CycleStatus;
 use App\Enums\Shared\Goal;
 use App\Models\AthleteProfile;
+use App\Models\Cycle;
 use App\Models\Exercise;
 use App\Models\Routine;
 use App\Services\Cycle\CycleDraftService;
@@ -74,4 +75,20 @@ it('reuses catalogue rows and opens no transaction of its own', function () {
 
     $this->assertDatabaseCount('cycle_days', 5);
     $this->assertDatabaseHas('day_exercises', ['exercise_id' => $existing->id]);
+});
+
+// TC-31
+it('persistDays() writes days/exercises onto an existing cycle without touching the cycle row itself', function () {
+    $cycle = Cycle::factory()->generating()->create(['sequence_number' => 7]);
+    $plan = planData();
+
+    app(CycleDraftService::class)->persistDays($cycle, $plan);
+
+    $cycle->refresh()->load('cycleDays.dayExercises');
+
+    expect($cycle->status)->toBe(CycleStatus::Generating)
+        ->and($cycle->sequence_number)->toBe(7)
+        ->and($cycle->cycleDays)->toHaveCount(5);
+
+    $this->assertDatabaseCount('day_exercises', 25);
 });
