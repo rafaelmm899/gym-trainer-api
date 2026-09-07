@@ -27,6 +27,10 @@ arch('exercise controllers are invokable')
     ->expect('App\Http\Controllers\Exercise')
     ->toBeInvokable();
 
+arch('cycle controllers are invokable')
+    ->expect('App\Http\Controllers\Cycle')
+    ->toBeInvokable();
+
 arch('form requests extend FormRequest')
     ->expect('App\Http\Requests')
     ->toExtend('Illuminate\Foundation\Http\FormRequest');

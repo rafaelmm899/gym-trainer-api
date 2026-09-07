@@ -9,6 +9,7 @@ use App\Enums\Shared\Goal;
 use App\Exceptions\Cycle\CycleGenerationException;
 use App\Models\AthleteProfile;
 use App\Services\Cycle\CyclePlannerService;
+use Illuminate\Support\Collection;
 
 // TC-24
 it('maps a well-formed structured response into the DTO tree', function () {
@@ -141,3 +142,34 @@ it('builds the prompt from every profile field plus the routine goal and hint', 
             && str_contains($text, 'kilograms');
     });
 });
+
+// TC-29
+it('planNextCycle() maps a well-formed response the same way planFirstCycle() does', function () {
+    fakeCyclePlanner();
+    $profile = AthleteProfile::factory()->create();
+
+    $plan = app(CyclePlannerService::class)->planNextCycle($profile, Goal::Hypertrophy, 'PPL', new Collection, []);
+
+    expect($plan)->toBeInstanceOf(CyclePlanData::class)
+        ->and($plan->splitRationale)->toBeString()->not->toBe('')
+        ->and($plan->days)->toHaveCount(5)
+        ->and($plan->days[0])->toBeInstanceOf(CyclePlanDayData::class);
+
+    $exercise = $plan->days[0]->exercises[0];
+    expect($exercise)->toBeInstanceOf(CyclePlanExerciseData::class)
+        ->and($exercise->name)->toBe('Barbell Bench Press')
+        ->and($exercise->targetWeightKg)->toBe(40.0);
+});
+
+// TC-30
+it('planNextCycle() applies the same malformed-shape validation as planFirstCycle()', function (array $payload) {
+    CyclePlannerAgent::fake([$payload]);
+    $profile = AthleteProfile::factory()->create();
+
+    expect(fn () => app(CyclePlannerService::class)->planNextCycle($profile, Goal::Strength, null, new Collection, []))
+        ->toThrow(CycleGenerationException::class);
+})->with([
+    'four days' => [fn () => [...cyclePlanPayload(), 'days' => array_slice(cyclePlanPayload()['days'], 0, 4)]],
+    'reps inverted' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['rep_min' => 12, 'rep_max' => 8]]]]])],
+    'null weight' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['target_weight_kg' => null]]]]])],
+]);

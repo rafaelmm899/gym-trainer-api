@@ -2,6 +2,7 @@
 
 namespace App\Actions\Session;
 
+use App\Enums\Recommendation\RecommendationStatus;
 use App\Enums\Session\AnalysisState;
 use App\Models\ExerciseRecommendation;
 use App\Models\TrainingSession;
@@ -35,6 +36,11 @@ final class SessionAnalyzeAction
                         'target_rep_max' => $recommendation->targetRepMax,
                         'action' => $recommendation->action,
                         'explanation' => $recommendation->explanation,
+                        // A fresh analysis always makes this exercise's
+                        // recommendation current again, even if a prior cycle
+                        // rollover had marked it applied — updateOrCreate on
+                        // an existing row does not re-apply the column default.
+                        'status' => RecommendationStatus::Active,
                     ],
                 );
             }

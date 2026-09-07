@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\Recommendation\RecommendationAction;
+use App\Enums\Recommendation\RecommendationStatus;
 use App\Models\Concerns\HasPublicUuid;
 use Carbon\CarbonImmutable;
 use Database\Factories\ExerciseRecommendationFactory;
@@ -29,6 +30,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $target_rep_max
  * @property RecommendationAction $action
  * @property string $explanation
+ * @property RecommendationStatus $status
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read User $user
@@ -47,6 +49,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereRoutineId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereSourceSessionId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereStatus($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereTargetRepMax($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereTargetRepMin($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation whereTargetSets($value)
@@ -57,7 +60,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * @mixin \Eloquent
  */
-#[Fillable(['user_id', 'routine_id', 'exercise_id', 'source_session_id', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation'])]
+#[Fillable(['user_id', 'routine_id', 'exercise_id', 'source_session_id', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation', 'status'])]
 class ExerciseRecommendation extends Model
 {
     /** @use HasFactory<ExerciseRecommendationFactory> */
@@ -74,6 +77,7 @@ class ExerciseRecommendation extends Model
             'target_rep_min' => 'integer',
             'target_rep_max' => 'integer',
             'action' => RecommendationAction::class,
+            'status' => RecommendationStatus::class,
         ];
     }
 
