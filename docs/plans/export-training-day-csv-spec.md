@@ -112,7 +112,12 @@ CSRF token is required.
 
 | Method | Path | Auth | Request | Response | Status codes |
 |---|---|---|---|---|---|
-| GET | `/api/v1/routines/{routine}/cycle-days/{day}/export` | `auth:sanctum` + `RoutinePolicy::view` (via `->can('view', 'routine')`) | — · path: `{routine}` = `routines.uuid`, `{day}` = `cycle_days.uuid`. No body, no query string. | `text/csv` stream (see §2.1.1). `Content-Type: text/csv`. `Content-Disposition: attachment; filename="<name>"` (see §2.1.2). | `200` · `401` unauthenticated · `403` `AUTHORIZATION_EXCEPTION` (`{routine}` owned by another user) · `404` `NOT_FOUND_EXCEPTION` (`{routine}` / `{day}` uuid unknown or segment not a uuid) · `422` `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE` · `422` `ROUTINE_HAS_NO_ACTIVE_CYCLE` |
+| GET | `/api/v1/routines/{routine}/cycle-days/{day}/export` | `auth:sanctum` + `RoutinePolicy::view` (via `->can('view', 'routine')`) | — · path: `{routine}` = `routines.uuid`, `{day}` = `cycle_days.uuid`. No body, no query string. | `text/csv` stream (see §2.1.1). `Content-Type: text/csv; charset=UTF-8`. `Content-Disposition: attachment; filename="<name>"` (see §2.1.2). | `200` · `401` unauthenticated · `403` `AUTHORIZATION_EXCEPTION` (`{routine}` owned by another user) · `404` `NOT_FOUND_EXCEPTION` (`{routine}` / `{day}` uuid unknown or segment not a uuid) · `422` `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE` · `422` `ROUTINE_HAS_NO_ACTIVE_CYCLE` |
+
+> **`Content-Type` value.** The controller sets `['Content-Type' => 'text/csv']`,
+> but Symfony's `Response::prepare()` appends `; charset=<charset>` to any
+> `text/*` type that has no charset, so the header actually emitted — and what
+> tests must assert — is `text/csv; charset=UTF-8`.
 
 Notes:
 
@@ -165,6 +170,12 @@ Notes:
 
 Line endings `\n`; encoding UTF-8, no BOM. The body has three parts, in order.
 
+**The `#` prelude is positional, not a global comment syntax.** `#` lines appear
+**only** as the contiguous block before the header row. A consumer (a test here,
+the Order-154 importer later) skips leading `#` lines until it reaches the header
+row, then stops treating `#` specially — a data cell is allowed to begin with `#`
+(e.g. an exercise the AI named `#2 Press`), and such a row must not be dropped.
+
 **1. Comment block** — one or more lines each starting with `# `. Free text, not
 CSV records (never passed through `fputcsv`). Newlines/tabs inside any
 interpolated rationale or explanation are collapsed to single spaces
@@ -191,8 +202,8 @@ string-cast.
     only if `target_weight_kg` is not null, then `" RPE<r>"` only if `target_rpe`
     is not null, then `", descanso <rest_seconds>s"` (the word `descanso` from
     `lang/es/export.php`). `<reps>` is `rep_min` when `rep_min === rep_max`,
-    otherwise `"<rep_min>-<rep_max>"`. `<w>` / `<r>` are the decimals with
-    trailing zeros trimmed (`(float)` cast → `100`, `102.5`, `8`).
+    otherwise `"<rep_min>-<rep_max>"`. `<w>` / `<r>` are formatted with the
+    number helper below.
   - The `Recomendacion: <action> — <explanation>` segment is appended **only
     when** an active `ExerciseRecommendation` exists for that exercise.
     `<action>` is the raw backed enum value (`advance_weight`, …) — the same
@@ -206,25 +217,40 @@ string-cast.
 exercise,set_number,prescribed_weight_kg,prescribed_reps,prescribed_rpe,rest_seconds,recommended_weight_kg,recommended_action,weight_kg,reps,rpe,note
 ```
 
-**3. Data rows** — for each `day_exercise` (ordered by `order` asc), emit `sets`
-rows with `set_number` running `1..sets`. Every row for one exercise carries the
-same prescription and recommendation values. Written with `fputcsv($h, $row,
-escape: '')` (RFC-4180 quoting, no legacy backslash escaping).
+**3. Data rows** — walk the `day_exercises` in `order` asc; for each, emit `sets`
+rows. Every row for one `day_exercise` carries that prescription's values (and,
+if the exercise has an active recommendation, that recommendation's values).
+Written with `fputcsv($h, $row, escape: '')` (RFC-4180 quoting, no legacy
+backslash escaping).
+
+`set_number` is assigned **continuously per distinct `exercise_id` across the
+whole day**, not reset per `day_exercise`. In the normal case (one prescription
+per exercise) this is identical to `1..sets`. If a day prescribes the same
+exercise in two `day_exercises` (allowed by the schema — see §9 "Duplicate
+exercise in a day"), the second block continues the numbering (`1..4` then
+`5..7`), so `exercise` + `set_number` stays a unique row key for the import
+round-trip.
 
 | Column | Value |
 |---|---|
 | `exercise` | `exercise.name` (quoted by `fputcsv` if it contains `,` `"` or newline) |
-| `set_number` | `1` … `sets` |
-| `prescribed_weight_kg` | `target_weight_kg`, trailing zeros trimmed; empty string if null |
+| `set_number` | running 1-based index of the set within its `exercise_id` for the day (see above) |
+| `prescribed_weight_kg` | `num(target_weight_kg)`; empty string if null |
 | `prescribed_reps` | `rep_min` if `rep_min === rep_max`, else `"<rep_min>-<rep_max>"` |
-| `prescribed_rpe` | `target_rpe`, trailing zeros trimmed; empty string if null |
+| `prescribed_rpe` | `num(target_rpe)`; empty string if null |
 | `rest_seconds` | `rest_seconds` (integer) |
-| `recommended_weight_kg` | active recommendation's `target_weight_kg`, trailing zeros trimmed; empty string if no active recommendation |
+| `recommended_weight_kg` | `num(target_weight_kg)` of the active recommendation; empty string if no active recommendation |
 | `recommended_action` | active recommendation's `action->value`; empty string if none |
 | `weight_kg` | empty string (user fills) |
 | `reps` | empty string (user fills) |
 | `rpe` | empty string (user fills) |
 | `note` | empty string (user fills) |
+
+**`num($v)` — the decimal helper.** `target_weight_kg` / `target_rpe` are
+`decimal:2` / `decimal:1` casts, i.e. strings like `"100.00"` / `"8.0"`.
+`num($v)` = `rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.')` —
+deterministic (independent of PHP's `precision` ini), trailing zeros trimmed:
+`"100.00" → "100"`, `"102.50" → "102.5"`, `"8.0" → "8"`.
 
 A day with **zero** `day_exercises` yields a valid `200`: the comment block
 (line 1, and line 2 if a split rationale exists) followed by the header row and
@@ -250,8 +276,10 @@ Sentadilla,4,100,5,8,180,102.5,advance_weight,,,,
 `Content-Disposition: attachment; filename="<routine-slug>-<ciclo>-<seq>-<dia>-<order>-<label-slug>.csv"`
 
 - `<routine-slug>` = `Str::slug(Str::ascii($routine->name))`; `<label-slug>` =
-  `Str::slug(Str::ascii($cycleDay->label))`. If either slug comes out empty
-  (name/label is all non-latin), fall back to `rutina` / `dia` respectively.
+  `Str::slug(Str::ascii($cycleDay->label))`. If a slug comes out empty
+  (the value is all non-latin), fall back to `rutina` for the routine and
+  `sin-nombre` for the label — distinct tokens so the filename never renders an
+  adjacent `dia-<order>-dia`.
 - `<ciclo>` and `<dia>` are the literal words from `lang/es/export.php`
   (`export.filename.cycle` = `ciclo`, `export.filename.day` = `dia`).
 - `<seq>` = `cycle.sequence_number`, `<order>` = `cycleDay.order` (integers).
@@ -390,17 +418,22 @@ real AI, no network.*
 
 **Feature — happy path & format**
 
-**TC-1:** exports a valid day as a CSV attachment
+**TC-1:** exports a valid day as a CSV attachment, scoped to that day only
 - **Given:** a user owns a routine with an `active` cycle (`sequence_number` 3)
-  whose day `order` 3 (`label` "Piernas", `focus_muscle_groups`
-  `["quads","glutes"]`) has two `day_exercises` (`sets` 4 and 3).
-- **When:** `GET /api/v1/routines/{routine}/cycle-days/{day}/export` as that user.
-- **Expect:** `200`; header `Content-Type` is `text/csv`; header
+  with **two** days — day `order` 1 (`label` "Empuje") with a `day_exercise` for
+  "Press banca" that has its own `active` `ExerciseRecommendation`
+  (`explanation` "solo dia 1"), and day `order` 3 (`label` "Piernas",
+  `focus_muscle_groups` `["quads","glutes"]`) with two `day_exercises`
+  (`sets` 4 and 3).
+- **When:** `GET /api/v1/routines/{routine}/cycle-days/{day order 3 uuid}/export`
+  as that user.
+- **Expect:** `200`; header `Content-Type` is `text/csv; charset=UTF-8`; header
   `Content-Disposition` contains
   `attachment; filename="<routine-slug>-ciclo-3-dia-3-piernas.csv"`; body
   contains the `# rutina: … | ciclo 3 | dia 3 (Piernas) | foco: quads, glutes`
   line, the exact header row, `4 + 3 = 7` data rows, `set_number` running `1..4`
-  then `1..3`, and every `weight_kg,reps,rpe,note` cell empty.
+  then `1..3`, and every `weight_kg,reps,rpe,note` cell empty; the body contains
+  **no** occurrence of `Press banca` or `solo dia 1` (day 1 does not leak).
 
 **TC-2:** an exercise with an active recommendation fills the `recommended_*` cells and the `#` line
 - **Given:** one `day_exercise` for exercise "Sentadilla"; an `active`
@@ -455,7 +488,8 @@ real AI, no network.*
   non-`#` line and parses to 12 fields.
 
 **TC-9:** rows are ordered by `day_exercise.order` then `set_number`
-- **Given:** two `day_exercises` with `order` 2 ("B") and 1 ("A").
+- **Given:** two `day_exercises` for two **different** exercises — exercise "B" at
+  `order` 2, exercise "A" at `order` 1.
 - **When:** export the day.
 - **Expect:** all "A" rows precede all "B" rows; within each, `set_number` is
   ascending and contiguous from 1.
@@ -479,57 +513,66 @@ real AI, no network.*
 - **Expect:** `200`; body is the `# rutina: …` line (+ split-rationale line if
   any) then the header row, and zero data rows.
 
+**TC-13:** the same exercise prescribed twice in one day gets continuous `set_number`
+- **Given:** the active cycle's day has two `day_exercises` for the **same**
+  catalogue exercise "Sentadilla" — `order` 1 (`sets` 4, `target_weight_kg` 100)
+  and `order` 2 (`sets` 3, `target_weight_kg` 80).
+- **When:** export the day and parse the data rows with `str_getcsv`.
+- **Expect:** 7 rows, every `exercise` cell is `Sentadilla`, `set_number` runs
+  `1..7` with no repeat; rows 1–4 have `prescribed_weight_kg` `100`, rows 5–7
+  have `80`.
+
 **Feature — authorization & errors**
 
-**TC-13:** a `{day}` of another routine is rejected
+**TC-14:** a `{day}` of another routine is rejected
 - **Given:** caller owns routine R1 (active cycle); day D belongs to routine R2
   (any owner).
 - **When:** `GET /api/v1/routines/{R1}/cycle-days/{D}/export`.
 - **Expect:** `422`, `data.code` = `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
 
-**TC-14:** a `{day}` of a non-active cycle of the same routine is rejected
+**TC-15:** a `{day}` of a non-active cycle of the same routine is rejected
 - **Given:** caller's routine has a `completed` cycle `seq` 1 and an `active`
   cycle `seq` 2; day D belongs to `seq` 1.
 - **When:** export D.
 - **Expect:** `422`, `data.code` = `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
 
-**TC-15:** a routine whose current cycle is not active is rejected
+**TC-16:** a routine whose current cycle is not active is rejected
 - **Given:** caller's routine has a single cycle with `status = generating`
   (via `Cycle::factory()->generating()`), containing a day D.
 - **When:** export D.
 - **Expect:** `422`, `data.code` = `ROUTINE_HAS_NO_ACTIVE_CYCLE`.
 
-**TC-16:** an archived routine is rejected with `ROUTINE_HAS_NO_ACTIVE_CYCLE`
+**TC-17:** an archived routine is rejected with `ROUTINE_HAS_NO_ACTIVE_CYCLE`
 - **Given:** caller's routine is `archived`; its last cycle is `completed` with a
   day D.
 - **When:** export D.
 - **Expect:** `422`, `data.code` = `ROUTINE_HAS_NO_ACTIVE_CYCLE` (the "no active
   cycle" guard is checked first).
 
-**TC-17:** another user's routine → 403
+**TC-18:** another user's routine → 403
 - **Given:** routine owned by a different user, with an active cycle and a day D.
 - **When:** the caller exports `/routines/{thatRoutine}/cycle-days/{D}/export`.
 - **Expect:** `403`, `data.code` = `AUTHORIZATION_EXCEPTION`.
 
-**TC-18:** unknown `{routine}` uuid → 404
+**TC-19:** unknown `{routine}` uuid → 404
 - **When:** export with a random uuid for `{routine}`.
 - **Expect:** `404`, `data.code` = `NOT_FOUND_EXCEPTION`.
 
-**TC-19:** unknown `{day}` uuid → 404
+**TC-20:** unknown `{day}` uuid → 404
 - **Given:** caller's routine with an active cycle.
 - **When:** export with a random uuid for `{day}`.
 - **Expect:** `404`, `data.code` = `NOT_FOUND_EXCEPTION`.
 
-**TC-20:** a non-uuid path segment → 404
+**TC-21:** a non-uuid path segment → 404
 - **When:** `GET /api/v1/routines/not-a-uuid/cycle-days/also-bad/export`.
 - **Expect:** `404`, `data.code` = `NOT_FOUND_EXCEPTION`.
 
-**TC-21:** unauthenticated → 401
+**TC-22:** unauthenticated → 401
 - **Given:** no authenticated user.
 - **When:** export any day.
 - **Expect:** `401`, `data.code` = `AUTHENTICATION_EXCEPTION`.
 
-**TC-22:** rendering does not trip strict-mode lazy loading
+**TC-23:** rendering does not trip strict-mode lazy loading
 - **Given:** a day with several exercises and a mix of recommendations.
 - **When:** export the day.
 - **Expect:** `200`, no `Illuminate\Database\LazyLoadingViolationException`
@@ -539,13 +582,13 @@ real AI, no network.*
 
 **Feature — docs**
 
-**TC-23:** Scramble documents the CSV response
+**TC-24:** Scramble documents the CSV response
 - **When:** the OpenAPI document is generated (`app(Dedoc\Scramble\Generator::class)()`).
 - **Expect:** `paths['/api/v1/routines/{routine}/cycle-days/{day}/export']['get']
   ['responses']['200']['content']` has a `text/csv` key and no
   `application/json` key.
 
-**TC-24:** the route inherits the root security scheme (extend `DocsSecurityTest`)
+**TC-25:** the route inherits the root security scheme (extend `DocsSecurityTest`)
 - **When:** the OpenAPI document is generated.
 - **Expect:** `paths['/api/v1/routines/{routine}/cycle-days/{day}/export']['get']`
   has no `security` key (it inherits the document-root scheme), asserted
@@ -553,41 +596,90 @@ real AI, no network.*
 
 **Unit — `CycleDayCsvExportService`**
 
-**TC-25:** builds the exact header row as the first non-comment line.
+*Each calls `app(CycleDayCsvExportService::class)->handle($routine, $day)` after
+building the graph with factories; `contents` is split on `\n` and the leading
+`#` lines dropped before parsing data rows with `str_getcsv`.*
 
-**TC-26:** emits `sets` data rows per `day_exercise` with contiguous
-`set_number` starting at 1, per exercise.
+**TC-26:** builds the exact header row
+- **Given:** a routine with an `active` cycle whose day has one `day_exercise`.
+- **When:** `handle()`, then take the first line of `contents` that does not
+  start with `#`.
+- **Expect:** that line equals, byte for byte, the header string in §2.1.1
+  (`exercise,set_number,prescribed_weight_kg,…,note`).
 
-**TC-27:** `prescribed_reps` — single value when `rep_min === rep_max`, else
-`"<min>-<max>"`.
+**TC-27:** emits one row per prescribed set
+- **Given:** the day has one `day_exercise` for exercise "X" with `sets = 3`.
+- **When:** `handle()`, parse data rows.
+- **Expect:** exactly 3 rows, all `exercise` = `X`, `set_number` = `1`, `2`, `3`.
 
-**TC-28:** null `target_weight_kg` / `target_rpe` → empty cells and the `#`
-fragment omits `@ …kg` / `RPE…`.
+**TC-28:** `prescribed_reps` — single value vs. range
+- **Given:** two `day_exercises` — A with `rep_min = rep_max = 5`, B with
+  `rep_min = 8`, `rep_max = 12`.
+- **When:** `handle()`, parse data rows.
+- **Expect:** every A row's `prescribed_reps` cell is `5`; every B row's is
+  `8-12`; the two `#` exercise lines contain `x5` and `x8-12` respectively.
 
-**TC-29:** an `active` recommendation fills `recommended_weight_kg` /
-`recommended_action`; an `applied` one or none leaves them empty.
+**TC-29:** null `target_weight_kg` / `target_rpe`
+- **Given:** one `day_exercise` with `target_weight_kg = null`,
+  `target_rpe = null`, `rest_seconds = 90`.
+- **When:** `handle()`.
+- **Expect:** every data row's `prescribed_weight_kg` and `prescribed_rpe` cells
+  are the empty string; the exercise's `#` line contains `descanso 90s` and
+  contains neither `@` nor `RPE`.
 
-**TC-30:** `split_rationale === null` → no `racional del split:` line;
-non-blank → the line is present with the collapsed text.
+**TC-30:** recommendation cells reflect only `active` rows
+- **Given:** three `day_exercises` — A's exercise has an `active`
+  `ExerciseRecommendation` (`target_weight_kg` 80, `action` `hold`); B's has an
+  `applied` one; C's has none.
+- **When:** `handle()`, parse data rows.
+- **Expect:** A's rows have `recommended_weight_kg` `80` and `recommended_action`
+  `hold`; B's and C's rows have both cells empty.
 
-**TC-31:** newlines in `rationale` / `explanation` are collapsed to single
-spaces.
+**TC-31:** `split_rationale` present vs. null
+- **Given:** run once with the active cycle's `split_rationale = "Empuje\nprimero"`,
+  once with `split_rationale = null`.
+- **When:** `handle()` each time.
+- **Expect:** first `contents` contains the line
+  `# racional del split: Empuje primero`; second `contents` has no line starting
+  `# racional del split:`.
 
-**TC-32:** filename slugging — an accented routine name / label yields an
-ASCII `Str::slug` result; an all-non-latin label falls back to `dia`
-(`…-dia-<order>-dia.csv`).
+**TC-32:** newlines in rationale / explanation are collapsed
+- **Given:** a `day_exercise` with `rationale = "line one\nline two"` whose
+  exercise has an `active` recommendation with `explanation = "a\n\nb"`.
+- **When:** `handle()`.
+- **Expect:** the exercise's `#` line contains `Racional: line one line two` and
+  `— a b`, and the line has no embedded `\n`.
 
-**TC-33:** guard — `$routine->cycle` is `null`, or its `status` is not
-`Active`, throws `App\Exceptions\Cycle\RoutineHasNoActiveCycleException`
-(`statusCode() === 422`, `errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`).
+**TC-33:** filename slugging and fallbacks
+- **Given:** routine `name = "Volumen Invierno ñ"`, `cycle.sequence_number = 2`;
+  day `label = "重い日"` (no latin characters), `order = 4`.
+- **When:** `handle()['filename']`.
+- **Expect:** equals `volumen-invierno-n-ciclo-2-dia-4-sin-nombre.csv` — the
+  routine name is `Str::ascii`-folded then slugged, the empty label slug falls
+  back to `sin-nombre`.
 
-**TC-34:** guard — a `CycleDay` whose `cycle_id` is not the active cycle's id
-throws `App\Exceptions\Cycle\CycleDayNotInActiveCycleException`
-(`statusCode() === 422`, `errorCode() === 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`).
+**TC-34:** guard — routine has no active cycle
+- **Given:** a routine whose highest-`sequence_number` cycle has
+  `status = generating` (`Cycle::factory()->generating()`), with a day D under it.
+- **When:** `handle($routine, $D)`.
+- **Expect:** throws `App\Exceptions\Cycle\RoutineHasNoActiveCycleException`;
+  the caught instance's `statusCode() === 422` and
+  `errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`.
 
-**TC-35:** returns `['filename' => …, 'contents' => …]` — `filename` ends `.csv`
-and matches the §2.1.2 pattern; `contents` is the full CSV string (comment
-block + header + data rows).
+**TC-35:** guard — day not in the active cycle
+- **Given:** a routine with an `active` cycle `seq` 2 and a `completed` cycle
+  `seq` 1; day D belongs to `seq` 1.
+- **When:** `handle($routine, $D)`.
+- **Expect:** throws `App\Exceptions\Cycle\CycleDayNotInActiveCycleException`;
+  `statusCode() === 422`, `errorCode() === 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`.
+
+**TC-36:** return shape
+- **Given:** a routine with an `active` cycle whose day has one `day_exercise`.
+- **When:** `$result = handle($routine, $day)`.
+- **Expect:** `$result` has exactly the keys `filename` and `contents` (both
+  strings); `$result['filename']` matches
+  `/^[a-z0-9-]+-ciclo-\d+-dia-\d+-[a-z0-9-]+\.csv$/`; `$result['contents']`
+  starts with `# rutina:` and contains the header row.
 
 ---
 
@@ -596,6 +688,9 @@ block + header + data rows).
 | Decision area | What was decided | Why |
 |---|---|---|
 | Success body vs. JSON-Resource rule | The CSV is streamed with `response()->streamDownload(fn () => print $csv['contents'], $csv['filename'], ['Content-Type' => 'text/csv'])` from the controller — no JSON Resource. A one-line carve-out is added to **both** `CLAUDE.md` and `AGENTS.md`. | Golden rules 2 & 3 forbid a non-Resource success body; a file download genuinely cannot be one. Decided with the user this session: document the exception rather than contort the payload into `{ data: { csv: "…" } }`. Errors on the route stay the JSON envelope. |
+| `Content-Type` header value | Controller passes `text/csv`; the header actually emitted (and asserted by TC-1) is `text/csv; charset=UTF-8`. | Symfony `Response::prepare()` appends `; charset=<charset>` to any `text/*` type lacking one. Pinning the real value keeps the TC-1 assertion correct. |
+| Duplicate exercise in a day | `set_number` is assigned continuously per `exercise_id` across the day's `day_exercises`, not reset per prescription. A day is *expected* to prescribe each exercise once. | The schema allows a repeat (`day_exercises` has `unique(cycle_day_id, order)` only) and `CycleDraftService::persistDay()` does not dedupe; downstream (`ProgressionSummaryService`) already collapses by `exercise_id`. Continuous numbering keeps `exercise` + `set_number` a unique row key for the Order-154 import round-trip. |
+| Decimal formatting (`num()`) | `num($v)` = `rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.')` for `prescribed_weight_kg`, `prescribed_rpe`, `recommended_weight_kg`. | `(string)(float)` depends on PHP's `precision` ini and can emit artefacts; the source columns are `decimal:2` / `decimal:1` strings, so a string-level trim is deterministic. |
 | Service return type | `array{filename: string, contents: string}` (array-shape PHPDoc), not a new `Data` class. | Two internal strings that never leave the process as JSON. A dedicated class would be indirection with no payoff (`CLAUDE.md` rule 6); array-shape PHPDoc is an explicit `CLAUDE.md` convention. |
 | Service calling a Service | `CycleDayCsvExportService` constructor-injects and calls `RecommendationCatalogService`. | `CLAUDE.md`'s Service rules forbid a Service calling an **Action**, dispatching a job, or firing an event — not composing another read-only Service. Reusing it beats duplicating its cycle-scoped query (rule 6). |
 | `{day}` identifier | `cycle_days.uuid` with route-model binding (not the story's `order` 1..N). | Consistency with `POST /api/v1/routines/{routine}/sessions`, which already takes the day as `cycle_days.uuid`. The story flagged this for spec-review; resolved with the user. |
@@ -610,8 +705,8 @@ block + header + data rows).
 | CSV column headers | English, fixed, verbatim from the story. | Shared machine contract with the importer; not user prose. |
 | CSV writer | `fputcsv($h, $row, escape: '')` for the header + data rows; raw `fwrite` / `echo` for `#` lines. | `escape: ''` gives RFC-4180 quoting without PHP's legacy backslash-escaping quirk (and sidesteps the PHP 8.4 default-`$escape` deprecation). `#` lines are not CSV records and must not be quoted. |
 | Encoding / EOL / BOM | UTF-8, `\n`, no BOM. | The importer expects plain UTF-8 comma CSV; a BOM would corrupt the first header cell for naive parsers. Excel-direct-open of non-ASCII names is a known, accepted v1 tradeoff. |
-| Scramble | Document the `200` `text/csv` response via whatever hook the installed `dedoc/scramble` 0.13.x exposes — a custom operation/response transformer registered in a service provider, or a response attribute/PHPDoc tag if that version supports one. Verified by TC-23, not by the mechanism. | Scramble infers `application/json` from the lack of a JSON return type; the spec pins the observable outcome and lets implementation pick the hook (confirm the API with `search-docs` / `application-info` before coding). |
-| Filename slug fallback | Empty `Str::slug` → `rutina` / `dia`. | A routine/label with no latin characters would otherwise produce `--ciclo-3-dia-3-.csv`. |
+| Scramble | Document the `200` `text/csv` response via whatever hook the installed `dedoc/scramble` 0.13.x exposes — a custom operation/response transformer registered in a service provider, or a response attribute/PHPDoc tag if that version supports one. Verified by TC-24, not by the mechanism. | Scramble infers `application/json` from the lack of a JSON return type; the spec pins the observable outcome and lets implementation pick the hook (confirm the API with `search-docs` / `application-info` before coding). |
+| Filename slug fallback | Empty `Str::slug` → `rutina` for the routine, `sin-nombre` for the label. | A value with no latin characters would otherwise produce `--ciclo-3-dia-3-.csv`; distinct tokens also avoid an adjacent `dia-<order>-dia`. |
 | No throttle / cache headers | None added. | Cheap bounded read; matches `routines/{routine}/recommendations`. |
 
 ---
@@ -622,15 +717,15 @@ block + header + data rows).
 |---|---|---|
 | 1 | Add one line to **`CLAUDE.md`** and the identical line to **`AGENTS.md`** (English), as a sub-point under golden rule 3 / the "JSON Resource" section: a file-download success body (e.g. a CSV export) is returned with `response()->streamDownload(...)` / `response()->download(...)` and an explicit `Content-Type`, is the **only** sanctioned use of `response()->…` for a success body, and does not use a JSON Resource; errors on such routes are still the JSON envelope. | Both files carry the same sentence; `git diff` touches only these two lines. |
 | 2 | Create `lang/es/export.php` with the keys in §6 (`filename.cycle`, `filename.day`, `comment.day`, `comment.split_rationale`, `comment.exercise`, `comment.exercise_recommendation`, `prescription.rest`). | `trans('export.comment.day', [], 'es')` returns the Spanish template string. |
-| 3 | Create `app/Exceptions/Cycle/RoutineHasNoActiveCycleException.php` — `final`, extends `App\Exceptions\DomainException`, `protected string $errorCode = 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`, `protected int $statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, constructor sets a default message ("This routine has no active cycle to export."). | Class exists; `(new …)->statusCode() === 422` and `->errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`; covered by TC-33. |
-| 4 | Create `app/Exceptions/Cycle/CycleDayNotInActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`, `$statusCode = 422`, default message ("That day does not belong to this routine's active cycle."). PHPDoc cross-references `App\Exceptions\Session\CycleDayNotInActiveCycleException` (409, session-open flow) and states why this is a distinct Cycle-domain class. | Class exists; `->statusCode() === 422`; covered by TC-34. |
-| 5 | Create `app/Services/Cycle/CycleDayCsvExportService.php` — `final`, constructor-injects `RecommendationCatalogService`. `handle(Routine $routine, CycleDay $day): array` returning `array{filename: string, contents: string}` (array-shape PHPDoc): (a) `$cycle = $routine->cycle`; `throw_if($cycle === null \|\| $cycle->status !== CycleStatus::Active, new RoutineHasNoActiveCycleException)`; (b) `throw_unless($day->cycle_id === $cycle->id, new CycleDayNotInActiveCycleException)`; (c) `$day->loadMissing('dayExercises.exercise')`; (d) `$recs = $this->catalog->listCurrentForRoutine($routine)->keyBy('exercise_id')`; (e) build the CSV string per §2.1.1 (comment block via `strtr` on `trans('export.*', [], 'es')`, whitespace-collapsed rationales/explanations, header + data rows via `fputcsv($h, $row, escape: '')` on an `fopen('php://temp', 'r+')` handle then `rewind` + `stream_get_contents`); (f) build the filename per §2.1.2 (`Str::slug(Str::ascii(...))`, `rutina`/`dia` fallback, `ciclo`/`dia` words from `lang/es/export.php`); (g) `return ['filename' => …, 'contents' => …]`. A one-line comment explains the pinned `es` locale. | `vendor/bin/pest tests/Unit/Cycle/CycleDayCsvExportServiceTest.php` passes (TC-25–TC-35). |
-| 6 | Create `app/Http/Controllers/Cycle/ExportCycleDayController.php` — invokable, `__invoke(Routine $routine, CycleDay $day, CycleDayCsvExportService $export): StreamedResponse` → `$csv = $export->handle($routine, $day); return response()->streamDownload(fn () => print($csv['contents']), $csv['filename'], ['Content-Type' => 'text/csv']);`. | ~3 lines; `arch('cycle controllers are invokable')` still passes; covered by TC-1. |
-| 7 | Register the route in `routes/api.php` inside the `auth:sanctum` group, immediately after `routines.recommendations.list`: `Route::get('routines/{routine}/cycle-days/{day}/export', ExportCycleDayController::class)->whereUuid('routine')->whereUuid('day')->can('view', 'routine')->name('routines.cycle-days.export');` with a short comment in the file's existing style. Add the `use App\Http\Controllers\Cycle\ExportCycleDayController;` import in alphabetical order. | `php artisan route:list` shows the route; TC-1 and the error TCs resolve it. |
-| 8 | Document the `text/csv` `200` response for Scramble — register a minimal operation transformer (or use a response attribute if the installed `dedoc/scramble` 0.13.x exposes one) so the export operation advertises `text/csv` and drops the inferred `application/json`. Keep it scoped to this one route. | TC-23 passes: the generated spec's `…/export` `get.responses.200.content` has `text/csv` and no `application/json`. |
-| 9 | Extend `tests/Feature/Auth/DocsSecurityTest.php`: add `->and($spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get'])->not->toHaveKey('security')` to the existing chain. | TC-24; `vendor/bin/pest --filter=DocsSecurity` passes. |
-| 10 | Write `tests/Unit/Cycle/CycleDayCsvExportServiceTest.php` — TC-25 through TC-35, calling the Service directly with factory-built graphs. | `vendor/bin/pest tests/Unit/Cycle/CycleDayCsvExportServiceTest.php` green. |
-| 11 | Write `tests/Feature/Cycle/ExportCycleDayTest.php` — TC-1 through TC-24, following the structure of `tests/Feature/Cycle/GenerateCycleTest.php` and `tests/Feature/Recommendation/ListRoutineRecommendationsTest.php`. Parse CSV bodies with `str_getcsv` where field counts matter; read the streamed body with `$response->streamedContent()`. | `vendor/bin/pest tests/Feature/Cycle/ExportCycleDayTest.php` green. |
+| 3 | Create `app/Exceptions/Cycle/RoutineHasNoActiveCycleException.php` — `final`, extends `App\Exceptions\DomainException`, `protected string $errorCode = 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`, `protected int $statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, constructor sets a default message ("This routine has no active cycle to export."). | Class exists; `(new …)->statusCode() === 422` and `->errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'` (a one-off `expect()` here, then locked by TC-34 in Task 10). |
+| 4 | Create `app/Exceptions/Cycle/CycleDayNotInActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`, `$statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, default message ("That day does not belong to this routine's active cycle."). PHPDoc cross-references `App\Exceptions\Session\CycleDayNotInActiveCycleException` (409, session-open flow) and states why this is a distinct Cycle-domain class. | Class exists; `->statusCode() === 422`, `->errorCode() === 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'` (locked by TC-35 in Task 10). |
+| 5 | Create `app/Services/Cycle/CycleDayCsvExportService.php` — `final`, constructor-injects `RecommendationCatalogService`. `handle(Routine $routine, CycleDay $day): array` returning `array{filename: string, contents: string}` (array-shape PHPDoc): (a) `$cycle = $routine->cycle`; `throw_if($cycle === null \|\| $cycle->status !== CycleStatus::Active, new RoutineHasNoActiveCycleException)`; (b) `throw_unless($day->cycle_id === $cycle->id, new CycleDayNotInActiveCycleException)`; (c) `$day->loadMissing('dayExercises.exercise')`; (d) `$recs = $this->catalog->listCurrentForRoutine($routine)->keyBy('exercise_id')`; (e) build the CSV string per §2.1.1 — comment block via `strtr` on `trans('export.*', [], 'es')` with whitespace-collapsed rationales/explanations and the `#`-prelude rule; header + data rows via `fputcsv($h, $row, escape: '')` on an `fopen('php://temp', 'r+')` handle then `rewind` + `stream_get_contents`; `set_number` counted per `exercise_id` across the day; decimals via the `num()` helper (§2.1.1); (f) build the filename per §2.1.2 (`Str::slug(Str::ascii(...))`, `rutina` / `sin-nombre` fallbacks, `ciclo` / `dia` words from `lang/es/export.php`); (g) `return ['filename' => …, 'contents' => …]`. A one-line comment explains the pinned `es` locale. | Method + `num()` helper implemented; `vendor/bin/phpstan analyse` clean for the file. Behaviour is locked by TC-26–TC-36 in Task 10. |
+| 6 | Create `app/Http/Controllers/Cycle/ExportCycleDayController.php` — invokable, `__invoke(Routine $routine, CycleDay $day, CycleDayCsvExportService $export): StreamedResponse` → `$csv = $export->handle($routine, $day); return response()->streamDownload(fn () => print($csv['contents']), $csv['filename'], ['Content-Type' => 'text/csv']);`. | ~3 lines; `arch('cycle controllers are invokable')` still passes. HTTP behaviour is locked by the feature suite in Task 11. |
+| 7 | Register the route in `routes/api.php` inside the `auth:sanctum` group, immediately after `routines.recommendations.list`: `Route::get('routines/{routine}/cycle-days/{day}/export', ExportCycleDayController::class)->whereUuid('routine')->whereUuid('day')->can('view', 'routine')->name('routines.cycle-days.export');` with a short comment in the file's existing style. Add the `use App\Http\Controllers\Cycle\ExportCycleDayController;` import in alphabetical order. | `php artisan route:list` lists `routines.cycle-days.export` with method `GET` and middleware `auth:sanctum`, `can:view,routine`. |
+| 8 | Document the `text/csv` `200` response for Scramble — register a minimal operation transformer (or use a response attribute if the installed `dedoc/scramble` 0.13.x exposes one) so the export operation advertises `text/csv` and drops the inferred `application/json`. Keep it scoped to this one route. | TC-24 passes: the generated spec's `…/export` `get.responses.200.content` has `text/csv` and no `application/json`. |
+| 9 | Extend `tests/Feature/Auth/DocsSecurityTest.php`: add `->and($spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get'])->not->toHaveKey('security')` to the existing chain. | TC-25; `vendor/bin/pest --filter=DocsSecurity` passes. |
+| 10 | Write `tests/Unit/Cycle/CycleDayCsvExportServiceTest.php` — every TC from TC-26 through TC-36 as its own `it()`, calling the Service directly with factory-built graphs. | `vendor/bin/pest tests/Unit/Cycle/CycleDayCsvExportServiceTest.php` green; each of TC-26–TC-36 present. |
+| 11 | Write `tests/Feature/Cycle/ExportCycleDayTest.php` — every TC from TC-1 through TC-25 as its own `it()`, following the structure of `tests/Feature/Cycle/GenerateCycleTest.php` and `tests/Feature/Recommendation/ListRoutineRecommendationsTest.php`. Parse CSV bodies with `str_getcsv` where field counts matter; read the streamed body with `$response->streamedContent()`. | `vendor/bin/pest tests/Feature/Cycle/ExportCycleDayTest.php` green; each of TC-1–TC-25 present. |
 | 12 | Run the project checks on touched paths: `vendor/bin/pint app/Exceptions/Cycle app/Services/Cycle app/Http/Controllers/Cycle routes/api.php lang tests/Unit/Cycle tests/Feature/Cycle tests/Feature/Auth/DocsSecurityTest.php --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Cycle` plus `--filter=DocsSecurity`. | Pint clean, PHPStan level 6 clean, all listed tests green. No migration → no `ide-helper:models`, no DB clone. |
 
 ---
