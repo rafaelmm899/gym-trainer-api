@@ -3,11 +3,18 @@
 namespace App\Providers;
 
 use Carbon\CarbonImmutable;
+use Dedoc\Scramble\Scramble;
+use Dedoc\Scramble\Support\Generator\Operation;
+use Dedoc\Scramble\Support\Generator\Response as OpenApiResponse;
+use Dedoc\Scramble\Support\Generator\Schema;
+use Dedoc\Scramble\Support\Generator\Types\StringType;
+use Dedoc\Scramble\Support\RouteInfo;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
+use Symfony\Component\HttpFoundation\Response;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -28,6 +35,7 @@ class AppServiceProvider extends ServiceProvider
         $this->configureDates();
         $this->configureModels();
         $this->configureUrl();
+        $this->configureApiDocs();
     }
 
     /**
@@ -71,5 +79,25 @@ class AppServiceProvider extends ServiceProvider
     private function configureUrl(): void
     {
         URL::forceHttps($this->app->isProduction());
+    }
+
+    /**
+     * The CSV export route (`routines.cycle-days.export`) streams `text/csv`;
+     * Scramble infers `application/json` from the controller's return type, so
+     * its `200` response is rewritten here. Scoped to that one operation.
+     */
+    private function configureApiDocs(): void
+    {
+        Scramble::configure()->withOperationTransformers(function (Operation $operation, RouteInfo $routeInfo): void {
+            if ($routeInfo->route->getName() !== 'routines.cycle-days.export') {
+                return;
+            }
+
+            $operation->responses = [
+                OpenApiResponse::make(Response::HTTP_OK)
+                    ->setDescription('The training day as a downloadable CSV.')
+                    ->setContent('text/csv', Schema::fromType(new StringType)),
+            ];
+        });
     }
 }

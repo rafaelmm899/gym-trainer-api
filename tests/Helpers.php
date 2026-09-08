@@ -39,6 +39,25 @@ function iso8601Pattern(): string
 }
 
 /**
+ * The data rows of an exported training-day CSV: the `#` comment prelude and
+ * the header row stripped, each remaining line parsed RFC-4180 (no escape
+ * character, matching how the export writes it).
+ *
+ * @return list<list<string|null>>
+ */
+function csvDataRows(string $contents): array
+{
+    $lines = array_values(array_filter(
+        explode("\n", rtrim($contents, "\n")),
+        fn (string $line): bool => $line !== '' && ! str_starts_with($line, '#'),
+    ));
+
+    array_shift($lines); // header row
+
+    return array_map(fn (string $line): array => str_getcsv($line, ',', '"', ''), $lines);
+}
+
+/**
  * A well-formed structured payload for the AI cycle planner: a 5-day split with
  * a full prescription per exercise. `array_replace_recursive` overrides let a
  * test bend one field (or swap `days` wholesale) to exercise a failure path.
