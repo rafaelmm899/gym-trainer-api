@@ -7,9 +7,8 @@
 > `docs/product-context.md` §2 / §4 (steps 4 & 6) / §6,
 > `CLAUDE.md` "The pipeline" / "Layout — folders by domain" / "Errors — one
 > envelope" / "Conventions",
-> `docs/plans/routine-recommendations-endpoint-spec.md` (the trivial
-> authenticated-read reference — `RoutinePolicy::view` reuse,
-> `RecommendationCatalogService`),
+> `docs/plans/routine-recommendations-endpoint-spec.md` (the `RoutinePolicy::view`
+> reuse reference),
 > `docs/plans/create-training-session-spec.md` /
 > `docs/plans/store-set-logs-spec.md` (the active-cycle guard shape,
 > `TrainingSessionOpeningService`, `DomainException` subclasses),
@@ -18,16 +17,14 @@
 > `ApiExceptionRenderer`).
 >
 > **Format decisions (this session):** the story says "CSV" with a `#` comment
-> prelude carrying the day's metadata and rationales. Two revisions:
-> 1. The download is an **`.xlsx` workbook**, built with **`maatwebsite/excel`**,
->    not CSV.
-> 2. **No `#` prelude and no metadata block.** The file is a *flat, fillable*
->    sheet: a header row, then one row per prescribed set. The day's identity is
->    in the filename; the split / exercise / recommendation rationales stay in
->    the JSON endpoints the user already has (`GET /api/v1/routines/{routine}`
->    carries `split_rationale`; `GET /api/v1/routines/{routine}/recommendations`
->    carries each recommendation's `explanation`). PO-approved — the goal is "un
->    excel simple que el usuario pueda cargar".
+> prelude carrying the day's metadata and rationales. As built:
+> 1. The download is an **`.xlsx` workbook**, built with **`maatwebsite/excel`**.
+> 2. **No prelude / no metadata block.** A flat, fillable sheet: a header row,
+>    then one row per prescribed set. The day's identity is the filename; the
+>    split / exercise / recommendation rationales stay in the JSON endpoints
+>    (`GET /api/v1/routines/{routine}` carries `split_rationale`;
+>    `GET /api/v1/routines/{routine}/recommendations` carries each
+>    recommendation's `explanation`). PO-approved.
 
 ## 1. Context
 
@@ -54,36 +51,36 @@ input to the companion import story (Order 154, **not** in this PR).
   cycle. `{routine}` and `{day}` are both bound by `uuid`.
 - Adding **`maatwebsite/excel`** (Laravel Excel) as a dependency — approved by
   the product owner this session.
-- **`App\Exports\Cycle\CycleDayExport`** — a `FromArray` + `WithHeadings` +
-  `WithStrictNullComparison` export that, in its constructor, runs the business
-  guards, resolves the current recommendations (via
-  `RecommendationCatalogService`) and builds every row. It exposes the download
-  `filename`. **No Service** — the export class *is* the unit of this feature.
-- The 12-column layout (§2.1.1): `set_number` runs continuously per `exercise_id`
-  across the day. An exercise with no active recommendation still appears (its
-  `recommended_*` cells blank).
+- **Two new `Routine` relations** (model-only, no schema change): `activeCycle`
+  (`HasOne<Cycle>` where `status = active`) and `activeExerciseRecommendations`
+  (`HasMany<ExerciseRecommendation>` where `status = active`).
+- **`App\Services\Cycle\CycleDayExportService`** — the pipeline step: guard the
+  active cycle and that the day is in it, load the day's prescriptions, build the
+  filename, and hand a `CycleDayExport` the day-exercises + the routine's active
+  recommendations keyed by `exercise_id`.
+- **`App\Exports\Cycle\CycleDayExport`** — a pure Laravel Excel adapter
+  (`FromCollection` + `WithHeadings` + `WithMapping` + `WithStrictNullComparison`):
+  `headings()` is the fixed column list; `map(DayExercise)` turns one prescription
+  into one row per prescribed set, casting decimals and formatting the reps
+  label. No guards, no queries.
+- The 12-column layout (§2.1.1). `set_number` runs `1..sets` **per prescription**.
+  An exercise with no active recommendation still appears (its `recommended_*`
+  cells blank).
 - Reusing `RoutinePolicy::view` via `->can('view', 'routine')` (a routine the
   caller does not own → `403`).
 - Two new `App\Exceptions\Cycle\` `DomainException` subclasses (`422`).
 - Broadening the `CLAUDE.md` / `AGENTS.md` golden-rule-3 carve-out to name
   `Excel::download(...)` as a sanctioned file-download success body.
-- Documenting the spreadsheet response for Scramble (it infers
-  `application/json` by default).
+- Documenting the spreadsheet response for Scramble.
 
 **Out of scope:**
 
-- **The `#` comment prelude / any day-metadata block in the file**, and the
-  split / exercise / recommendation rationales. The day's identity is the
-  filename; the rationales live in the JSON endpoints. PO-approved deviation
-  from the story's example.
+- **Any day-metadata block in the file**, and the split / exercise /
+  recommendation rationales. PO-approved deviation from the story's `#` example.
 - **The import endpoint** `POST .../import` (Order 154) — a separate story/PR.
-  This ticket only defines the column contract; it makes no writes.
-- **Free / off-plan sessions** — the export is always a day of the active cycle.
-- **Exporting the whole cycle** — one day per request.
-- **CSV / other formats.** `.xlsx` only; the `Accept` header is ignored (no
-  content negotiation, no `406`).
-- **Workbook styling** — no column widths, freeze panes, bold header, cell
-  formats. A plain single sheet.
+- **Free / off-plan sessions**; **exporting the whole cycle**; **CSV / other
+  formats** (the `Accept` header is ignored, no `406`).
+- **Workbook styling** — no widths, freeze panes, bold header, cell formats.
 - **Pagination / caching headers / throttling.**
 - Any change to how cycles, days, prescriptions or recommendations are written.
 - The `gym-trainer-spa/` frontend.
@@ -106,76 +103,68 @@ Notes:
 - **`{routine}` binding & authorization.** `->whereUuid('routine')` — a non-uuid
   segment never matches → `404`. Implicit binding resolves `{routine}` by
   `uuid`; unknown uuid → `404`. `->can('view', 'routine')` runs after binding: a
-  foreign routine → `403`. Overrides the story's literal "404" — every
-  routine-scoped endpoint in the API already answers `403` here.
+  foreign routine → `403`. Overrides the story's literal "404".
 - **`{day}` binding.** `->whereUuid('day')` — non-uuid → `404`; unknown uuid →
-  `404`. Not scoped to `{routine}` (`Routine` has no `days` relation). A `{day}`
-  uuid that is a real `CycleDay` of another routine or a stale cycle resolves,
-  then `CycleDayExport`'s guard rejects it with `422
-  CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`. Overrides the story's `order` (1..N) segment,
-  for consistency with `POST .../sessions`.
-- **Guard order.** `CycleDayExport::__construct()` checks *"the routine has an
-  active cycle"* before *"this day is in it"*, mirroring
-  `TrainingSessionOpeningService`. A routine whose highest-`sequence_number`
-  cycle is `generating` / `failed` / `completed` / `incomplete` (or an
-  `archived` routine) → `422 ROUTINE_HAS_NO_ACTIVE_CYCLE`.
-- **"The active cycle"** = `$routine->cycle()->first()` (highest
-  `sequence_number`) whose `status` is `CycleStatus::Active` — the exact check
-  from `TrainingSessionOpeningService::guard()`.
-- **Errors stay JSON.** The guards throw from the export's constructor —
+  `404`. Not scoped to `{routine}`. A `{day}` uuid that is a real `CycleDay` of
+  another routine or a stale cycle resolves, then the Service's guard rejects it
+  with `422 CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`. Overrides the story's `order` (1..N)
+  segment, for consistency with `POST .../sessions`.
+- **Guard order.** `CycleDayExportService::handle()` checks *"the routine has an
+  active cycle"* (`$routine->activeCycle !== null`) before *"this day is in it"*
+  (`$day->cycle_id === $routine->activeCycle->id`), mirroring
+  `TrainingSessionOpeningService`. A routine whose current cycle is
+  `generating` / `failed` / `completed` / `incomplete` (or an `archived`
+  routine) → `422 ROUTINE_HAS_NO_ACTIVE_CYCLE`.
+- **`Routine::activeCycle`** = `hasOne(Cycle::class)->where('status', CycleStatus::Active)`.
+  A routine has exactly one active cycle at a time (product invariant).
+- **Errors stay JSON.** The guards throw from `CycleDayExportService::handle()` —
   *before* `Excel::download()` is called — so `ApiExceptionRenderer` renders the
   usual `{ "data": { "code", "message" } }` envelope with no partial file. The
   two new `DomainException` subclasses flow through the renderer's existing
   `DomainException` arm (`errorCode()` / `statusCode()`), no wiring.
 - **`Content-Type`.** `Excel::download()` serves the file via
   `response()->download()`, which sets the xlsx mime from the file extension.
-- **Pipeline.** No Form Request, no Action, **no Service**. The invokable
-  controller is ~3 lines: `new CycleDayExport($routine, $day, $recommendations)`
-  (`RecommendationCatalogService` injected into the controller) and
-  `Excel::download($sheet, $sheet->filename)`. The guards, recommendation
-  lookup, row building and filename all live in the export class, unit-tested
-  directly.
+- **Pipeline.** Controller → `CycleDayExportService` → `CycleDayExport`. No Form
+  Request, no Action. The invokable controller is ~3 lines: `$sheet =
+  $service->handle($routine, $day); return Excel::download($sheet, $sheet->filename);`.
+  The guards, the filename and the recommendation gathering live in the Service;
+  the row shaping lives in the export's `map()`.
 
 **Workbook shape** (§2.1.1)
 
-One sheet. `CycleDayExport` implements **`WithHeadings`** (a flat, single header
-row) and **`FromArray`** (the data rows). No `#` prelude, no metadata rows.
+One sheet, no metadata rows.
 
-**Header row** (`headings()`), exactly:
+**Header row** (`CycleDayExport::headings()`), exactly:
 
 ```
 exercise · set_number · prescribed_weight_kg · prescribed_reps · prescribed_rpe · rest_seconds · recommended_weight_kg · recommended_action · weight_kg · reps · rpe · note
 ```
 
-**Data rows** (`array()`) — walk `day_exercises` by `order` asc; for each, emit
-`sets` rows. Native cell types; `null` cells stay blank
-(`Maatwebsite\Excel\Concerns\WithStrictNullComparison`), so the user types into
-truly empty cells.
+**Data rows** — `CycleDayExport::map(DayExercise $de)` returns `$de->sets` rows.
+Native cell types; `null` cells stay blank (`WithStrictNullComparison`).
 
 | Column | Value / type |
 |---|---|
-| `exercise` | `exercise.name` (string) |
-| `set_number` | int, running 1-based index **per `exercise_id` across the whole day** — so the same exercise prescribed in two `day_exercises` continues the count (`1..4` then `5..7`), keeping `exercise` + `set_number` a unique row key for the import round-trip |
-| `prescribed_weight_kg` | `(float) target_weight_kg`, or `null` |
-| `prescribed_reps` | `rep_min` (int) when `rep_min === rep_max`, else `"<rep_min>-<rep_max>"` (string) |
-| `prescribed_rpe` | `(float) target_rpe`, or `null` |
-| `rest_seconds` | int |
-| `recommended_weight_kg` | `(float)` of the active recommendation's `target_weight_kg`, or `null` |
-| `recommended_action` | active recommendation's `action->value` (string), or `null` |
+| `exercise` | `$de->exercise->name` (string) |
+| `set_number` | int, `1..$de->sets` — **per prescription**. If the same exercise is prescribed twice in one day, its second `DayExercise` restarts at 1; the Order-154 importer renumbers per exercise anyway. |
+| `prescribed_weight_kg` | `(float) $de->target_weight_kg`, or `null` |
+| `prescribed_reps` | `$de->rep_min` (int) when `rep_min === rep_max`, else `"<rep_min>-<rep_max>"` (string) |
+| `prescribed_rpe` | `(float) $de->target_rpe`, or `null` |
+| `rest_seconds` | `$de->rest_seconds` (int) |
+| `recommended_weight_kg` | `(float)` of the active recommendation's `target_weight_kg` for `$de->exercise_id`, or `null` |
+| `recommended_action` | that recommendation's `action->value` (string), or `null` |
 | `weight_kg` / `reps` / `rpe` / `note` | `null` (user fills) |
 
 A day with **zero** `day_exercises` still exports: the header row, no data rows.
+A prescription with `sets < 1` contributes no rows.
 
-**Filename** (§2.1.2)
+**Filename** (§2.1.2) — built by the Service.
 
 `Content-Disposition: attachment; filename=<routine-slug>-ciclo-<seq>-dia-<order>-<label-slug>.xlsx`
 
-- `<routine-slug>` = `Str::slug(Str::ascii($routine->name))`; `<label-slug>` =
-  `Str::slug(Str::ascii($cycleDay->label))`. Empty slug → `rutina` for the
-  routine, `sin-nombre` for the label (distinct tokens, so no adjacent
-  `dia-<order>-sin-nombre` collision reads as a bug). `ciclo` / `dia` are
-  literal filename tokens. `<seq>` = `cycle.sequence_number`, `<order>` =
-  `cycleDay.order`.
+- `sprintf('%s-ciclo-%d-dia-%d-%s.xlsx', slug($routine->name) ?: 'rutina', $cycle->sequence_number, $day->order, slug($cycleDay->label) ?: 'sin-nombre')`.
+- `slug($v)` = `Str::slug(Str::ascii($v))`. Distinct fallbacks (`rutina` /
+  `sin-nombre`) so an empty slug never reads as a bug.
 - ASCII-only by construction → Symfony emits a plain `filename=…`.
 - Example: `volumen-invierno-ciclo-3-dia-3-piernas.xlsx`.
 
@@ -205,12 +194,13 @@ Not applicable — no components affected.
 
 ### 4.1 Schema changes
 
-Not applicable — no schema changes. Reads existing `routines`, `cycles`,
-`cycle_days`, `day_exercises`, `exercises`, `exercise_recommendations`. No new
-columns, tables, indexes or model relations.
+Not applicable — no schema changes. The two new `Routine` relations
+(`activeCycle`, `activeExerciseRecommendations`) are model-only; they read the
+existing `status` columns on `cycles` / `exercise_recommendations`. The endpoint
+reads `routines`, `cycles`, `cycle_days`, `day_exercises`, `exercises`,
+`exercise_recommendations`. No new columns, tables, indexes.
 
-**No database isolation needed** — no migration, no seed change. The Pest suite
-runs on SQLite `:memory:`.
+**No database isolation needed** — no migration, no seed change.
 
 **Doc update:** none. `docs/plans/data-model.md` is unchanged.
 
@@ -238,7 +228,7 @@ envelope. `GET`, so no CSRF token.
 
 No new Policy method — the route reuses `->can('view', 'routine')`, exactly as
 `routines.show` and `routines/{routine}/recommendations`. Ownership of `{day}`
-is a business-rule check (`422`) in the export class, not a Policy concern.
+is a business-rule check (`422`) in the Service, not a Policy concern.
 
 ---
 
@@ -263,122 +253,107 @@ English column headers and the filename tokens (`ciclo`, `dia`) inline.
 |---|---|---|
 | Getting a training day offline | Not possible — the user reads several JSON endpoints and hand-builds a sheet. | `GET .../cycle-days/{day}/export` streams one flat, ready-to-fill `.xlsx`. |
 | Success response body convention | Every `200`/`201` body is a JSON Resource under `data`; `response()->…` for a success body is banned (`CLAUDE.md` golden rules 2 & 3). | Unchanged for every existing endpoint. A **file-download** success body — `Excel::download(...)` / `response()->download(...)` / `response()->streamDownload(...)` — is the one sanctioned exception, documented by a broadened line in `CLAUDE.md` **and** `AGENTS.md`. Error bodies on the route are still the JSON envelope. |
-| "Day not in the active cycle" error | `App\Exceptions\Session\CycleDayNotInActiveCycleException` → `409` (session-open flow). | A **separate** `App\Exceptions\Cycle\CycleDayNotInActiveCycleException` → `422` for this endpoint. Same rule, different domain and status; the Session one is untouched. |
+| "Day not in the active cycle" error | `App\Exceptions\Session\CycleDayNotInActiveCycleException` → `409` (session-open flow). | A **separate** `App\Exceptions\Cycle\CycleDayNotInActiveCycleException` → `422` for this endpoint. |
+| `Routine` model | Has `cycle` (max `sequence_number`). | Adds `activeCycle` and `activeExerciseRecommendations` — both scoped to `status = active`. `activeCycle` also lets `TrainingSessionOpeningService` drop its hand-rolled check later. |
 | Scramble output for the route | n/a (route does not exist). | The operation documents a `200` with content type `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (Scramble would otherwise infer `application/json`), via an operation transformer registered in `AppServiceProvider`. |
 
 ---
 
 ## 8. Test Cases
 
-*All executable with `vendor/bin/pest`. Feature tests in
-`tests/Feature/Cycle/ExportCycleDayTest.php`, unit tests in
-`tests/Unit/Cycle/CycleDayExportTest.php`. Factories + states only; no real AI,
-no network. `Excel::fake()` (from `Maatwebsite\Excel\Facades\Excel`) per feature
-test that inspects the downloaded export.*
+*All executable with `vendor/bin/pest`. `Excel::fake()` (from
+`Maatwebsite\Excel\Facades\Excel`) per feature test that inspects the downloaded
+export.*
 
-**Feature — happy path**
+**Service — `tests/Unit/Cycle/CycleDayExportServiceTest.php`**
 
-**TC-1:** downloads the day as an `.xlsx` scoped to that day
-- **Given:** the caller owns a routine with an `active` cycle (`sequence_number`
-  3) with two days — day `order` 1 ("Empuje") with a "Press banca"
-  `day_exercise`, and day `order` 3 ("Piernas") with two `day_exercises`
-  (exercises "Sentadilla" `sets` 4, "Zancada" `sets` 3).
-- **When:** `Excel::fake()`, then
-  `GET .../cycle-days/{day order 3 uuid}/export`.
-- **Expect:** `200`;
-  `Excel::assertDownloaded('volumen-invierno-ciclo-3-dia-3-piernas.xlsx', …)`
-  where the callback asserts `headings()` is the exact 12-name row; 7 data rows;
-  `exercise` column `["Sentadilla"×4, "Zancada"×3]`; `set_number` column
-  `[1,2,3,4,1,2,3]`; every `weight_kg/reps/rpe/note` cell `null`; and `Press
-  banca` (day 1) appears in no row.
+**TC-1:** `handle()` returns a `CycleDayExport` whose `collection()` is the day's
+`day_exercises`.
 
-**TC-2:** an active recommendation fills `recommended_*`
-- **Given:** one `day_exercise` for "Sentadilla" (`sets` 2); an `active`
-  `ExerciseRecommendation` (`target_weight_kg` 102.5, `action` `advance_weight`).
-- **When:** `Excel::fake()`, export the day.
-- **Expect:** every data row has `recommended_weight_kg` `102.5` (float) and
-  `recommended_action` `advance_weight`.
+**TC-2:** `filename` — routine `"Volumen Invierno ñ"`, cycle `seq` 2, day
+`label "Piernas"` `order` 4 → `volumen-invierno-n-ciclo-2-dia-4-piernas.xlsx`.
 
-**Feature — authorization & errors**
+**TC-3:** an all-punctuation name → the `rutina` / `sin-nombre` fallbacks.
 
-**TC-3:** `{day}` of another routine → `422` `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
-
-**TC-4:** `{day}` of a non-active cycle of the same routine (a `completed` `seq`
-1 alongside an `active` `seq` 2) → `422` `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
-
-**TC-5:** the routine's current cycle is `generating` → `422`
-`ROUTINE_HAS_NO_ACTIVE_CYCLE`.
-
-**TC-6:** an `archived` routine (last cycle `completed`) → `422`
-`ROUTINE_HAS_NO_ACTIVE_CYCLE`.
-
-**TC-7:** a routine owned by another user → `403` `AUTHORIZATION_EXCEPTION`.
-
-**TC-8:** unknown `{routine}` uuid → `404` `NOT_FOUND_EXCEPTION`.
-
-**TC-9:** unknown `{day}` uuid → `404` `NOT_FOUND_EXCEPTION`.
-
-**TC-10:** a non-uuid path segment → `404` `NOT_FOUND_EXCEPTION`.
-
-**TC-11:** unauthenticated → `401` `AUTHENTICATION_EXCEPTION`.
-
-**TC-12:** rendering does not trip strict-mode lazy loading — `Excel::fake()`, a
-day with three exercises and one `active` recommendation → `200`, no
-`LazyLoadingViolationException`; `Excel::assertDownloaded` with the expected
-filename.
-
-**TC-13:** streams a genuine, non-empty `.xlsx` — **no** `Excel::fake()`; a
-routine with an active cycle and a day with one `day_exercise` (`sets` 2) →
-`200`; `assertDownload(<expected filename>)`; `Content-Type` is the spreadsheet
-mime; the streamed body's first two bytes are `PK` (a valid zip / `.xlsx`).
-
-*(The route inheriting the document-root security scheme is asserted in
-`tests/Feature/Auth/DocsSecurityTest.php`, extended with the new path. A
-companion feature test asserts the generated OpenAPI operation for `…/export`
-`get.responses.200.content` has the spreadsheet mime key and no
-`application/json` key.)*
-
-**Unit — `CycleDayExport`**
-
-*Each builds the graph with factories, then `new CycleDayExport($routine, $day,
-app(RecommendationCatalogService::class))` and inspects `->headings()` /
-`->array()` / `->filename`.*
-
-**TC-14:** `->headings()` is exactly the 12-name column header.
-
-**TC-15:** `sets` data rows per `day_exercise`, `set_number` `1,2,3` (ints).
-
-**TC-16:** `prescribed_reps` is the int `5` when `rep_min === rep_max === 5`, the
-string `"8-12"` when `rep_min` 8 / `rep_max` 12.
-
-**TC-17:** `target_weight_kg` / `target_rpe` `null` → those cells are `null`;
-`rest_seconds` is still the int.
-
-**TC-18:** an `active` recommendation fills `recommended_weight_kg` (`80.0`) and
-`recommended_action` (`hold`); an `applied` one or none leaves both `null`.
-
-**TC-19:** every data row's `weight_kg` / `reps` / `rpe` / `note` cell is `null`.
-
-**TC-20:** `filename` — routine `"Volumen Invierno ñ"`, cycle `seq` 2, day
-`label "!!!"` (no slug chars), `order` 4 →
-`volumen-invierno-n-ciclo-2-dia-4-sin-nombre.xlsx`.
-
-**TC-21:** constructing with a routine whose current cycle is not `active` throws
+**TC-4:** a routine whose current cycle is not `active` → throws
 `RoutineHasNoActiveCycleException` (`statusCode() === 422`,
 `errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`).
 
-**TC-22:** constructing with a `{day}` not in the active cycle throws
-`CycleDayNotInActiveCycleException` (`statusCode() === 422`,
-`errorCode() === 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`).
+**TC-5:** a `{day}` from a `completed` cycle of the same routine (with an
+`active` cycle alongside) → throws `CycleDayNotInActiveCycleException`
+(`statusCode() === 422`, `errorCode() === 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`).
 
-**TC-23:** the same exercise in two `day_exercises` (`sets` 4 then 3,
-`target_weight_kg` 100 then 80), the second at a higher `order` → 7 rows, all
-`exercise` `Sentadilla`, `set_number` `[1..7]`, `prescribed_weight_kg`
-`[100,100,100,100,80,80,80]` (floats). Also covers ordering by
-`day_exercise.order`.
+**Export — `tests/Unit/Cycle/CycleDayExportTest.php`**
 
-**TC-24:** the workbook is scoped to the requested day — a cycle with two days,
-export day 2, and day 1's exercise name is in no data row.
+*Built directly: `new CycleDayExport($filename, $dayExercises, $recommendations)`;
+`map($dayExercise)` called per prescription.*
+
+**TC-6:** `headings()` is exactly the 12-name column header.
+
+**TC-7:** `map()` on a prescription with `sets` 3 → 3 rows, `set_number`
+`1,2,3` (ints), the exercise name in column 0, the four actuals cells `null`.
+
+**TC-8:** `map()` casts `target_weight_kg` `"100.00"` → `100.0` and
+`target_rpe` `"8.0"` → `8.0`.
+
+**TC-9:** `prescribed_reps` is the int `5` when `rep_min === rep_max === 5`, the
+string `"8-12"` when `rep_min` 8 / `rep_max` 12.
+
+**TC-10:** `target_weight_kg` / `target_rpe` `null` → those cells are `null`.
+
+**TC-11:** a matching active recommendation fills `recommended_weight_kg`
+(`102.5`) and `recommended_action` (`advance_weight`); none → both `null`.
+
+**TC-12:** `map()` on a prescription with `sets` 0 → `[]`.
+
+**Feature — `tests/Feature/Cycle/ExportCycleDayTest.php`**
+
+**TC-13:** downloads the day as an `.xlsx` scoped to that day
+- **Given:** the caller owns a routine with an `active` cycle (`seq` 3) with two
+  days — day `order` 1 ("Empuje", exercise "Press banca"), and day `order` 3
+  ("Piernas", exercises "Sentadilla" `sets` 4 and "Zancada" `sets` 3).
+- **When:** `Excel::fake()`, then `GET .../cycle-days/{day order 3 uuid}/export`.
+- **Expect:** `200`;
+  `Excel::assertDownloaded('volumen-invierno-ciclo-3-dia-3-piernas.xlsx', …)` —
+  callback flattens `collection()` through `map()` and asserts `headings()` is
+  the 12-name row; 7 data rows; `exercise` column `["Sentadilla"×4, "Zancada"×3]`;
+  `set_number` column `[1,2,3,4,1,2,3]`; every actuals cell `null`; `Press banca`
+  (day 1) in no row.
+
+**TC-14:** a matching `active` recommendation → every data row's
+`recommended_weight_kg` is `102.5` and `recommended_action` is `advance_weight`.
+
+**TC-15:** an `applied` recommendation is ignored — `recommended_*` cells `null`.
+
+**TC-16:** `{day}` of another routine → `422` `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
+
+**TC-17:** `{day}` of a non-active cycle of the same routine → `422`
+`CYCLE_DAY_NOT_IN_ACTIVE_CYCLE`.
+
+**TC-18:** current cycle `generating` → `422` `ROUTINE_HAS_NO_ACTIVE_CYCLE`.
+
+**TC-19:** `archived` routine → `422` `ROUTINE_HAS_NO_ACTIVE_CYCLE`.
+
+**TC-20:** another user's routine → `403` `AUTHORIZATION_EXCEPTION`.
+
+**TC-21:** unknown `{routine}` uuid → `404` `NOT_FOUND_EXCEPTION`.
+
+**TC-22:** unknown `{day}` uuid → `404` `NOT_FOUND_EXCEPTION`.
+
+**TC-23:** a non-uuid path segment → `404` `NOT_FOUND_EXCEPTION`.
+
+**TC-24:** unauthenticated → `401` `AUTHENTICATION_EXCEPTION`.
+
+**TC-25:** streams a genuine `.xlsx` — **no** `Excel::fake()`; a day with one
+`day_exercise` (`sets` 2) → `200`; `assertDownload(<filename>)`; `Content-Type`
+is the spreadsheet mime; the streamed body's first two bytes are `PK`.
+
+**TC-26:** the generated OpenAPI operation for `…/export`
+`get.responses.200.content` has the spreadsheet mime key and no
+`application/json` key.
+
+*(The route inheriting the document-root security scheme is asserted in
+`tests/Feature/Auth/DocsSecurityTest.php`, extended with the new path.)*
 
 ---
 
@@ -386,21 +361,18 @@ export day 2, and day 1's exercise name is in no data row.
 
 | Decision area | What was decided | Why |
 |---|---|---|
-| Output format | `.xlsx`, not CSV. | The story says CSV, but a CSV cannot carry a `#` comment prelude *and* comma-safe data rows through one writer. Switched to `.xlsx` with the user this session. |
-| No `#` prelude / no metadata block | A flat sheet: header row + set rows. The day's identity is the filename; the split / exercise / recommendation rationales stay in the JSON endpoints. | Decided with the user this session ("un excel simple que el usuario pueda cargar"). The `#` prelude was a CSV-era comment marker; in an `.xlsx` it added a large amount of code (translation templates, `strtr`, whitespace/period trimming, per-exercise sentence assembly) for no functional gain. PO-approved deviation from the story's example. |
-| Library | `maatwebsite/excel` `^4.0` (Laravel Excel). | The user asked for it explicitly (dependency approved). Declarative concerns (`FromArray`, `WithHeadings`, `WithStrictNullComparison`) + `Excel::download()` / `Excel::fake()`. `^3.1` caps at Laravel 11; this app is on Laravel 13. |
-| Header via `WithHeadings` | `headings()` returns the flat 12-name row; `array()` returns only the data rows. | Requested by the user ("usa los métodos WithHeadings"). Laravel Excel writes the heading before the `FromArray` rows. |
-| No Service | `App\Exports\Cycle\CycleDayExport` owns the guards, recommendation lookup, row building and filename; the controller injects `RecommendationCatalogService` and passes it in. | Decided with the user this session ("ya no necesitaríamos el service"). A Laravel Excel export idiomatically gathers its own data; a Service on top would be indirection (`CLAUDE.md` rule 6). Guards run in the constructor, so an invalid day fails before `Excel::download()`. |
-| Guards throw from a constructor | `CycleDayExport::__construct()` runs `throw_if` / `throw_unless`. | The export is a single-use, per-request value object; building it *is* "handle this request". Throwing keeps the error before any bytes are written and the controller at ~3 lines. |
+| Output format | `.xlsx`, not CSV. | A CSV cannot carry a `#` prelude *and* comma-safe rows through one writer. Switched with the user. |
+| No metadata block | Flat sheet: header + set rows. Day identity in the filename; rationales stay in the JSON endpoints. | Decided with the user ("un excel simple que el usuario pueda cargar"). The `#` prelude was a CSV-era comment marker that dragged in translation templates, `strtr` and sentence assembly for no functional gain. PO-approved deviation from the story. |
+| Library | `maatwebsite/excel` `^4.0`. | User asked for it (approved). `^3.1` caps at Laravel 11; this app is on 13. |
+| Model the chain | Add `Routine::activeCycle()` (`HasOne<Cycle>` where `status = active`) and `Routine::activeExerciseRecommendations()` (`HasMany` where `status = active`). | Decided with the user — the guards and the recommendation lookup were hand-assembled navigation. `activeCycle` also replaces the check `TrainingSessionOpeningService` hand-rolls. A `DayExercise → recommendation` relation is not modelable (the match is `(routine_id, exercise_id)` and `routine_id` is three hops away; composite-key relations aren't first-class in Eloquent), so `map()` looks the recommendation up in the keyed collection the Service passes it. |
+| Service + Export split | `CycleDayExportService` = guards + gather + filename → returns a `CycleDayExport`. `CycleDayExport` = a pure Laravel Excel adapter (`FromCollection` + `WithHeadings` + `WithMapping` + `WithStrictNullComparison`). | Decided with the user. The export must *only* export; guards and queries are domain logic → the Service (`CLAUDE.md`: business guards live in a Service; controller stays ~3 lines). Row *shaping* (`map()`) is presentation and belongs in the export, like a JSON Resource's `toArray()`. |
+| `set_number` per prescription | `map()` numbers `1..$de->sets` for each `DayExercise`, statelessly. The same exercise twice in a day restarts at 1. | The natural `WithMapping` shape (no cross-item state). The duplicate-exercise-in-a-day case is rare, and the Order-154 importer renumbers per exercise regardless. |
+| Cell shaping in `map()` | `(float)` cast of the `decimal:*` strings, the `"8-12"` reps label, `null` for blanks. | Turning a record into cells *is* the export's job. Keeps the Service to guards + gather + filename. |
 | `{day}` identifier | `cycle_days.uuid` + route-model binding (not `order` 1..N). | Consistency with `POST .../sessions`. Resolved with the user. |
-| Foreign routine | `403` via the existing `->can('view', 'routine')` (not `404`). | Consistency with `routines.show` / `routines/{routine}/recommendations`. Resolved with the user. |
-| Invalid `{day}` / no active cycle | `422` via two new `App\Exceptions\Cycle\` `DomainException` subclasses (`protected int $statusCode = 422`). | The story specifies `422`. A cross-entity business check → a guard throwing a `DomainException`. `422` over the default `409` because a stale/foreign `{day}` uuid is an unprocessable parameter, not a state conflict. |
-| Distinct from `App\Exceptions\Session\CycleDayNotInActiveCycleException` | A new class, same name, under `App\Exceptions\Cycle\`. | That one is `409` for the session-open flow; the codebase keeps exceptions per-domain and already has two `RoutineNotActiveException` classes. |
-| Recommendations source | Reuse `RecommendationCatalogService::listCurrentForRoutine($routine)`, `->keyBy('exercise_id')`. | Already returns the `active` recommendations for the current cycle's exercises with `exercise` eager-loaded; the export only reads the ones matching this day. |
-| "Active cycle" resolution | `$routine->cycle()->first()` (highest `sequence_number`, explicit query) **and** `status === CycleStatus::Active`; active-cycle check first. | Byte-for-byte the rule and order from `TrainingSessionOpeningService::guard()`. The explicit `->cycle()->first()` avoids any `preventLazyLoading` question. |
-| Cell types | Native — `int` for `set_number` / `rest_seconds`, `float` for weights / rpe, `string` for names / `recommended_action` / a `prescribed_reps` range, `null` for every blank (with `WithStrictNullComparison`). | The point of `.xlsx` over CSV: real numbers to sum/chart, truly empty cells to type into. |
-| Scramble | An operation transformer registered via `Scramble::configure()->withOperationTransformers(...)` in `AppServiceProvider`, scoped to route name `routines.cycle-days.export`, rewrites the `200` response to the spreadsheet mime. | Scramble infers `application/json` from the `BinaryFileResponse` return type. Verified by a feature test on the generated spec, not by the mechanism. |
-| Filename slug fallback | Empty `Str::slug` → `rutina` (routine) / `sin-nombre` (label). | Avoids `--ciclo-3-dia-3-.xlsx`; distinct tokens avoid an odd-looking output. |
+| Foreign routine | `403` via the existing `->can('view', 'routine')` (not `404`). | Consistency with the sibling routine-scoped endpoints. Resolved with the user. |
+| Invalid `{day}` / no active cycle | `422` via two new `App\Exceptions\Cycle\` `DomainException` subclasses (`protected int $statusCode = 422`). | The story specifies `422`. A cross-entity business check → a guard throwing a `DomainException`. `422` over the default `409` because a stale/foreign `{day}` uuid is an unprocessable parameter. |
+| Distinct from `App\Exceptions\Session\CycleDayNotInActiveCycleException` | A new class, same name, under `App\Exceptions\Cycle\`. | That one is `409` for the session-open flow; the codebase keeps exceptions per-domain. |
+| Scramble | An operation transformer registered via `Scramble::configure()->withOperationTransformers(...)` in `AppServiceProvider`, scoped to route name `routines.cycle-days.export`, rewrites the `200` response to the spreadsheet mime. | Scramble infers `application/json` from the `BinaryFileResponse` return type. Verified by a feature test on the generated spec. |
 | No workbook styling / no throttle / no cache headers | None added. | Plain sheet, cheap bounded read. |
 
 ---
@@ -409,16 +381,18 @@ export day 2, and day 1's exercise name is in no data row.
 
 | # | Task | Definition of Done |
 |---|---|---|
-| 1 | `composer require maatwebsite/excel` (approved). Commit the `composer.json` / `composer.lock` change. | `maatwebsite/excel ^4.0` in `composer.json`; `Maatwebsite\Excel\Facades\Excel` resolves. |
+| 1 | `composer require maatwebsite/excel` (approved). Commit `composer.json` / `composer.lock`. | `maatwebsite/excel ^4.0` in `composer.json`; the facade resolves. |
 | 2 | Broaden the golden-rule-3 carve-out in **`CLAUDE.md`** and identically in **`AGENTS.md`**: a file-download endpoint returns a binary/stream download — `Excel::download(...)`, `response()->download(...)`, `response()->streamDownload(...)` — not a JSON Resource; errors on that route are still the JSON envelope. | Both files carry the same sentence. |
-| 3 | Create `app/Exceptions/Cycle/RoutineHasNoActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`, `$statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, default message. | `->statusCode() === 422`, `->errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'` (locked by TC-21 in Task 6). |
-| 4 | Create `app/Exceptions/Cycle/CycleDayNotInActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`, `$statusCode = 422`, default message. PHPDoc cross-references the Session-domain `409` sibling. | `->statusCode() === 422` (locked by TC-22 in Task 6). |
-| 5 | Create `app/Exports/Cycle/CycleDayExport.php` — `final`, implements `FromArray` + `WithHeadings` + `WithStrictNullComparison`. Constructor `(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations)`: (a) `$cycle = $routine->cycle()->first()`; `throw_if($cycle === null \|\| $cycle->status !== CycleStatus::Active, new RoutineHasNoActiveCycleException)`; (b) `throw_unless($day->cycle_id === $cycle->id, new CycleDayNotInActiveCycleException)`; (c) `$day->loadMissing('dayExercises.exercise')`; (d) `$recs = $recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id')`; (e) build `public readonly string $filename` (`sprintf('%s-ciclo-%d-dia-%d-%s.xlsx', …)` with slugged name/label, `rutina` / `sin-nombre` fallbacks) and `private readonly array $rows` (one per set — `set_number` per `exercise_id`, decimals as `?float`, `prescribed_reps` int-or-range, blanks `null`). `headings()` returns the 12-name const; `array()` returns `$this->rows`. Helpers: `reps()`, `number()`, `slug()`. | `vendor/bin/phpstan analyse` clean; behaviour locked by TC-14–TC-24 in Task 6. |
-| 6 | Write `tests/Unit/Cycle/CycleDayExportTest.php` — TC-14 through TC-24, each its own `it()`. | `vendor/bin/pest tests/Unit/Cycle/CycleDayExportTest.php` green. |
-| 7 | Create `app/Http/Controllers/Cycle/ExportCycleDayController.php` — invokable, `__invoke(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations): BinaryFileResponse` → `$sheet = new CycleDayExport($routine, $day, $recommendations); return Excel::download($sheet, $sheet->filename);`. Register the route in `routes/api.php` inside the `auth:sanctum` group after `routines.recommendations.list`: `->whereUuid('routine')->whereUuid('day')->can('view', 'routine')->name('routines.cycle-days.export')`, with a short comment. Add the controller import alphabetically. | `arch('cycle controllers are invokable')` passes; `php artisan route:list` shows `routines.cycle-days.export` (GET, `auth:sanctum`, `can:view,routine`). |
-| 8 | Add `AppServiceProvider::configureApiDocs()` (called from `boot()`): `Scramble::configure()->withOperationTransformers(...)` — for route name `routines.cycle-days.export`, set `$operation->responses` to a single `200` `Response` whose content type is `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`. | The Scramble companion feature test passes. |
-| 9 | Extend `tests/Feature/Auth/DocsSecurityTest.php`: assert `$spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get']` has no `security` key. | `vendor/bin/pest --filter=DocsSecurity` passes. |
-| 10 | Write `tests/Feature/Cycle/ExportCycleDayTest.php` — TC-1 through TC-13 plus the Scramble companion, each its own `it()`. `Excel::fake()` per test that inspects the export; TC-13 stays real. | `vendor/bin/pest tests/Feature/Cycle/ExportCycleDayTest.php` green. |
-| 11 | Run the project checks: `vendor/bin/pint app tests routes/api.php --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Cycle` plus `--filter=DocsSecurity`, then the full `vendor/bin/pest`. | Pint clean, PHPStan level 6 clean, all tests green. No migration → no `ide-helper:models`, no DB clone. |
+| 3 | Add to `app/Models/Routine.php`: `activeCycle(): HasOne` → `hasOne(Cycle::class)->where('status', CycleStatus::Active)`; `activeExerciseRecommendations(): HasMany` → `hasMany(ExerciseRecommendation::class)->where('status', RecommendationStatus::Active)`. Refresh the PHPDoc block (`ide-helper:models "App\Models\Routine" --write`, then check the `@property-read` lines by hand). | `$routine->activeCycle` / `$routine->activeExerciseRecommendations` resolve; `phpstan` clean. |
+| 4 | Create `app/Exceptions/Cycle/RoutineHasNoActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`, `$statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, default message. | `->statusCode() === 422`, `->errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'` (locked by TC-4). |
+| 5 | Create `app/Exceptions/Cycle/CycleDayNotInActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`, `$statusCode = 422`, default message. PHPDoc cross-references the Session-domain `409` sibling. | `->statusCode() === 422` (locked by TC-5). |
+| 6 | Create `app/Services/Cycle/CycleDayExportService.php` — `final`. `handle(Routine $routine, CycleDay $day): CycleDayExport`: `$routine->loadMissing(['activeCycle', 'activeExerciseRecommendations'])`; `throw_if($routine->activeCycle === null, new RoutineHasNoActiveCycleException)`; `throw_unless($day->cycle_id === $routine->activeCycle->id, new CycleDayNotInActiveCycleException)`; `$day->loadMissing('dayExercises.exercise')`; `return new CycleDayExport($this->filename(…), $day->dayExercises, $routine->activeExerciseRecommendations->keyBy('exercise_id'))`. Private `filename()` (`sprintf`) + `slug()`. | `phpstan` clean; behaviour locked by TC-1–TC-5. |
+| 7 | Create `app/Exports/Cycle/CycleDayExport.php` — `final`, implements `FromCollection` + `WithHeadings` + `WithMapping` + `WithStrictNullComparison`. Constructor `(public readonly string $filename, private readonly Collection $dayExercises, private readonly Collection $recommendations)`. `collection()` returns `$this->dayExercises`; `headings()` returns the 12-name array inline; `map(DayExercise $row)` returns `range(1, $row->sets)` mapped to the 12-cell rows (decimals via a private `number(): ?float`, reps label inline, actuals `null`), or `[]` when `$row->sets < 1`. No guards, no queries. | `phpstan` clean; behaviour locked by TC-6–TC-12. |
+| 8 | Write `tests/Unit/Cycle/CycleDayExportServiceTest.php` (TC-1–TC-5) and `tests/Unit/Cycle/CycleDayExportTest.php` (TC-6–TC-12), each case its own `it()`. | Both files green. |
+| 9 | Create `app/Http/Controllers/Cycle/ExportCycleDayController.php` — invokable, `__invoke(Routine $routine, CycleDay $day, CycleDayExportService $service): BinaryFileResponse` → `$sheet = $service->handle($routine, $day); return Excel::download($sheet, $sheet->filename);`. Register the route in `routes/api.php` inside the `auth:sanctum` group after `routines.recommendations.list`: `->whereUuid('routine')->whereUuid('day')->can('view', 'routine')->name('routines.cycle-days.export')`, with a short comment; import the controller alphabetically. | `arch('cycle controllers are invokable')` passes; `php artisan route:list` shows `routines.cycle-days.export`. |
+| 10 | Add `AppServiceProvider::configureApiDocs()` (called from `boot()`): `Scramble::configure()->withOperationTransformers(...)` — for route name `routines.cycle-days.export`, set `$operation->responses` to a single `200` `Response` whose content type is the spreadsheet mime. | TC-26 passes. |
+| 11 | Extend `tests/Feature/Auth/DocsSecurityTest.php`: assert `$spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get']` has no `security` key. | `vendor/bin/pest --filter=DocsSecurity` passes. |
+| 12 | Write `tests/Feature/Cycle/ExportCycleDayTest.php` — TC-13 through TC-26, each its own `it()`. A `renderedRows(CycleDayExport)` helper flattens `collection()` through `map()`. `Excel::fake()` per test that inspects the export; TC-25 stays real. | `vendor/bin/pest tests/Feature/Cycle/ExportCycleDayTest.php` green. |
+| 13 | Run the project checks: `vendor/bin/pint app tests routes/api.php --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Cycle` plus `--filter=DocsSecurity`, then the full `vendor/bin/pest`. | Pint clean, PHPStan level 6 clean, all tests green. No migration → no DB clone. |
 
 ---
