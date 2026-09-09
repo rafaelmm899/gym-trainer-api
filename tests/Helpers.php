@@ -39,22 +39,44 @@ function iso8601Pattern(): string
 }
 
 /**
- * The data rows of an exported training-day CSV: the `#` comment prelude and
- * the header row stripped, each remaining line parsed RFC-4180 (no escape
- * character, matching how the export writes it).
+ * True for a `CycleDayExport` row that is a `#` metadata line (one string cell
+ * starting with `#`), not a header/data row.
  *
- * @return list<list<string|null>>
+ * @param  array<int, mixed>  $row
  */
-function csvDataRows(string $contents): array
+function isExportCommentRow(array $row): bool
 {
-    $lines = array_values(array_filter(
-        explode("\n", rtrim($contents, "\n")),
-        fn (string $line): bool => $line !== '' && ! str_starts_with($line, '#'),
+    return count($row) === 1 && is_string($row[0]) && str_starts_with($row[0], '#');
+}
+
+/**
+ * The `#` metadata lines of a `CycleDayExport` sheet.
+ *
+ * @param  list<array<int, mixed>>  $rows
+ * @return list<string>
+ */
+function exportCommentLines(array $rows): array
+{
+    return array_values(array_map(
+        fn (array $row): string => (string) $row[0],
+        array_filter($rows, 'isExportCommentRow'),
     ));
+}
 
-    array_shift($lines); // header row
+/**
+ * The data rows of a `CycleDayExport` sheet — the `#` prelude and the header
+ * row dropped.
+ *
+ * @param  list<array<int, mixed>>  $rows
+ * @return list<array<int, mixed>>
+ */
+function exportDataRows(array $rows): array
+{
+    $data = array_values(array_filter($rows, fn (array $row): bool => ! isExportCommentRow($row)));
 
-    return array_map(fn (string $line): array => str_getcsv($line, ',', '"', ''), $lines);
+    array_shift($data); // header row
+
+    return array_values($data);
 }
 
 /**

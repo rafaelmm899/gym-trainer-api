@@ -82,21 +82,24 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * The CSV export route (`routines.cycle-days.export`) streams `text/csv`;
-     * Scramble infers `application/json` from the controller's return type, so
-     * its `200` response is rewritten here. Scoped to that one operation.
+     * The day-export route (`routines.cycle-days.export`) streams an `.xlsx`
+     * download; Scramble infers `application/json` from the controller's return
+     * type, so its `200` response is rewritten here. Scoped to that one
+     * operation.
      */
     private function configureApiDocs(): void
     {
-        Scramble::configure()->withOperationTransformers(function (Operation $operation, RouteInfo $routeInfo): void {
+        $spreadsheet = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+        Scramble::configure()->withOperationTransformers(function (Operation $operation, RouteInfo $routeInfo) use ($spreadsheet): void {
             if ($routeInfo->route->getName() !== 'routines.cycle-days.export') {
                 return;
             }
 
             $operation->responses = [
                 OpenApiResponse::make(Response::HTTP_OK)
-                    ->setDescription('The training day as a downloadable CSV.')
-                    ->setContent('text/csv', Schema::fromType(new StringType)),
+                    ->setDescription('The training day as a downloadable .xlsx workbook.')
+                    ->setContent($spreadsheet, Schema::fromType(new StringType)),
             ];
         });
     }

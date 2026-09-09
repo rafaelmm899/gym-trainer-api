@@ -56,11 +56,11 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->can('view', 'routine')
         ->name('routines.recommendations.list');
 
-    // Download one day of the routine's active cycle as CSV — prescription +
-    // current recommendations, blank actuals for the user to fill offline. Same
-    // ownership gate as routines.show; {day} is a cycle_days uuid and the
-    // Service rejects one outside the active cycle (422). The only endpoint
-    // whose success body is not a JSON Resource (a file download).
+    // Download one day of the routine's active cycle as an .xlsx workbook —
+    // prescription + current recommendations, blank actuals for the user to
+    // fill offline. Same ownership gate as routines.show; {day} is a cycle_days
+    // uuid and the Service rejects one outside the active cycle (422). The only
+    // endpoint whose success body is a file download, not a JSON Resource.
     Route::get('routines/{routine}/cycle-days/{day}/export', ExportCycleDayController::class)
         ->whereUuid('routine')
         ->whereUuid('day')

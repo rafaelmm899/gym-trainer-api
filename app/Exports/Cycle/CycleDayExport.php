@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Cycle;
+namespace App\Exports\Cycle;
 
 use App\Enums\Cycle\CycleStatus;
 use App\Exceptions\Cycle\CycleDayNotInActiveCycleException;
@@ -13,17 +13,22 @@ use App\Models\Routine;
 use App\Services\Recommendation\RecommendationCatalogService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
-use RuntimeException;
+use Maatwebsite\Excel\Concerns\FromArray;
+use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
 
 /**
- * Builds the CSV a user downloads for one day of their routine's active cycle:
- * a `#` comment prelude (day metadata, split rationale, one line per exercise
- * with its rationale and current recommendation) followed by the fixed header
- * row and one row per prescribed set. The `#` text is Spanish, from
- * `lang/es/export.php`; v1 is single-locale, so the locale is pinned here rather
- * than taken from `APP_LOCALE`.
+ * The workbook a user downloads for one day of their routine's active cycle: a
+ * single sheet with a `#` metadata prelude (day, split rationale, one line per
+ * exercise with its rationale and current recommendation), the header row, then
+ * one row per prescribed set. `null` cells stay blank
+ * ({@see WithStrictNullComparison}) for the user to fill in.
+ *
+ * The constructor runs the business guards (so an invalid day fails before any
+ * bytes are written) and assembles every row up front. The `#` text is Spanish,
+ * from `lang/es/export.php`; v1 is single-locale, so the locale is pinned here
+ * rather than taken from `APP_LOCALE`.
  */
-final class CycleDayCsvExportService
+final class CycleDayExport implements FromArray, WithStrictNullComparison
 {
     /** @var list<string> */
     private const HEADER = [
@@ -33,12 +38,12 @@ final class CycleDayCsvExportService
 
     private const LOCALE = 'es';
 
-    public function __construct(private RecommendationCatalogService $recommendations) {}
+    public readonly string $filename;
 
-    /**
-     * @return array{filename: string, contents: string}
-     */
-    public function handle(Routine $routine, CycleDay $day): array
+    /** @var list<list<string|int|float|null>> */
+    private readonly array $rows;
+
+    public function __construct(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations)
     {
         $cycle = $routine->cycle()->first();
 
@@ -47,31 +52,33 @@ final class CycleDayCsvExportService
 
         $day->loadMissing('dayExercises.exercise');
 
-        /** @var Collection<int, ExerciseRecommendation> $recommendations */
-        $recommendations = $this->recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id');
+        /** @var Collection<int, ExerciseRecommendation> $current */
+        $current = $recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id');
 
-        return [
-            'filename' => $this->filename($routine, $cycle, $day),
-            'contents' => $this->contents($routine, $cycle, $day, $recommendations),
-        ];
+        $this->filename = $this->buildFilename($routine, $cycle, $day);
+        $this->rows = $this->buildRows($routine, $cycle, $day, $current);
+    }
+
+    /**
+     * @return list<list<string|int|float|null>>
+     */
+    public function array(): array
+    {
+        return $this->rows;
     }
 
     /**
      * @param  Collection<int, ExerciseRecommendation>  $recommendations
+     * @return list<list<string|int|float|null>>
      */
-    private function contents(Routine $routine, Cycle $cycle, CycleDay $day, Collection $recommendations): string
+    private function buildRows(Routine $routine, Cycle $cycle, CycleDay $day, Collection $recommendations): array
     {
-        $handle = fopen('php://temp', 'r+');
+        $rows = array_map(
+            static fn (string $line): array => [$line],
+            $this->commentLines($routine, $cycle, $day, $recommendations),
+        );
 
-        if ($handle === false) {
-            throw new RuntimeException('Unable to open an in-memory stream for CSV assembly.');
-        }
-
-        foreach ($this->commentLines($routine, $cycle, $day, $recommendations) as $line) {
-            fwrite($handle, $line."\n");
-        }
-
-        fputcsv($handle, self::HEADER, escape: '');
+        $rows[] = self::HEADER;
 
         $setNumberByExercise = [];
 
@@ -81,25 +88,21 @@ final class CycleDayCsvExportService
             for ($set = 0; $set < $dayExercise->sets; $set++) {
                 $setNumberByExercise[$dayExercise->exercise_id] = ($setNumberByExercise[$dayExercise->exercise_id] ?? 0) + 1;
 
-                fputcsv($handle, [
+                $rows[] = [
                     $dayExercise->exercise->name,
                     $setNumberByExercise[$dayExercise->exercise_id],
-                    $dayExercise->target_weight_kg === null ? '' : $this->num($dayExercise->target_weight_kg),
+                    $this->decimal($dayExercise->target_weight_kg),
                     $this->reps($dayExercise),
-                    $dayExercise->target_rpe === null ? '' : $this->num($dayExercise->target_rpe),
+                    $this->decimal($dayExercise->target_rpe),
                     $dayExercise->rest_seconds,
-                    $recommendation === null ? '' : $this->num($recommendation->target_weight_kg),
-                    $recommendation?->action->value ?? '',
-                    '', '', '', '',
-                ], escape: '');
+                    $recommendation === null ? null : $this->decimal($recommendation->target_weight_kg),
+                    $recommendation?->action->value,
+                    null, null, null, null,
+                ];
             }
         }
 
-        rewind($handle);
-        $contents = stream_get_contents($handle);
-        fclose($handle);
-
-        return $contents === false ? '' : $contents;
+        return $rows;
     }
 
     /**
@@ -154,24 +157,24 @@ final class CycleDayCsvExportService
         $fragment = $dayExercise->sets.'x'.$this->reps($dayExercise);
 
         if ($dayExercise->target_weight_kg !== null) {
-            $fragment .= ' @ '.$this->num($dayExercise->target_weight_kg).'kg';
+            $fragment .= ' @ '.$this->numberText($dayExercise->target_weight_kg).'kg';
         }
 
         if ($dayExercise->target_rpe !== null) {
-            $fragment .= ' RPE'.$this->num($dayExercise->target_rpe);
+            $fragment .= ' RPE'.$this->numberText($dayExercise->target_rpe);
         }
 
         return $fragment.', '.$this->line('prescription.rest').' '.$dayExercise->rest_seconds.'s';
     }
 
-    private function reps(DayExercise $dayExercise): string
+    private function reps(DayExercise $dayExercise): int|string
     {
         return $dayExercise->rep_min === $dayExercise->rep_max
-            ? (string) $dayExercise->rep_min
+            ? $dayExercise->rep_min
             : $dayExercise->rep_min.'-'.$dayExercise->rep_max;
     }
 
-    private function filename(Routine $routine, Cycle $cycle, CycleDay $day): string
+    private function buildFilename(Routine $routine, Cycle $cycle, CycleDay $day): string
     {
         return implode('-', [
             $this->slug($routine->name, 'rutina'),
@@ -180,7 +183,7 @@ final class CycleDayCsvExportService
             $this->line('filename.day'),
             $day->order,
             $this->slug($day->label, 'sin-nombre'),
-        ]).'.csv';
+        ]).'.xlsx';
     }
 
     private function slug(string $value, string $fallback): string
@@ -190,11 +193,16 @@ final class CycleDayCsvExportService
         return $slug === '' ? $fallback : $slug;
     }
 
+    private function decimal(?string $value): ?float
+    {
+        return $value === null ? null : (float) $value;
+    }
+
     /**
-     * Decimals arrive as `decimal:*` cast strings ("100.00"). Trim to the
-     * shortest exact form ("100", "102.5"), independent of PHP's `precision`.
+     * A `decimal:*` cast string ("100.00") as the shortest exact decimal text
+     * ("100", "102.5"), for the `#` prelude — independent of PHP's `precision`.
      */
-    private function num(string $value): string
+    private function numberText(string $value): string
     {
         return rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.');
     }

@@ -19,10 +19,10 @@ PHP 8.5 · Laravel 13 · PostgreSQL 17 · Redis (cache + session) · queue drive
 3. **Always a JSON Resource — `response()->json(...)` is banned.** Every success
    body is an Eloquent API Resource / `ResourceCollection`. No exceptions: not a
    model, not an array, not a DTO, not a hand-built JSON response. *Sole
-   carve-out:* a file-download endpoint (e.g. a CSV export) returns
-   `response()->streamDownload(...)` / `response()->download(...)` with an
-   explicit `Content-Type` — the only sanctioned `response()->…` success body;
-   errors on that route are still the JSON envelope.
+   carve-out:* a file-download endpoint (e.g. a spreadsheet export) returns a
+   binary/stream download — `Excel::download(...)`, `response()->download(...)`,
+   `response()->streamDownload(...)` — not a JSON Resource; errors on that route
+   are still the JSON envelope.
 4. **Every data route:** `auth:sanctum` + a Policy. No user sees another's data.
 5. **Simplicity first.** Reduce cognitive load; the best change often deletes
    code. Prefer the boring, obvious solution — no speculative generality, no

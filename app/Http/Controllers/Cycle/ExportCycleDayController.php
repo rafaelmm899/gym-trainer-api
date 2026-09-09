@@ -2,21 +2,19 @@
 
 namespace App\Http\Controllers\Cycle;
 
+use App\Exports\Cycle\CycleDayExport;
 use App\Models\CycleDay;
 use App\Models\Routine;
-use App\Services\Cycle\CycleDayCsvExportService;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use App\Services\Recommendation\RecommendationCatalogService;
+use Maatwebsite\Excel\Facades\Excel;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 final class ExportCycleDayController
 {
-    public function __invoke(Routine $routine, CycleDay $day, CycleDayCsvExportService $export): StreamedResponse
+    public function __invoke(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations): BinaryFileResponse
     {
-        $csv = $export->handle($routine, $day);
+        $sheet = new CycleDayExport($routine, $day, $recommendations);
 
-        return response()->streamDownload(
-            fn () => print ($csv['contents']),
-            $csv['filename'],
-            ['Content-Type' => 'text/csv'],
-        );
+        return Excel::download($sheet, $sheet->filename);
     }
 }
