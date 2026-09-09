@@ -2,18 +2,17 @@
 
 namespace App\Http\Controllers\Cycle;
 
-use App\Exports\Cycle\CycleDayExport;
 use App\Models\CycleDay;
 use App\Models\Routine;
-use App\Services\Recommendation\RecommendationCatalogService;
+use App\Services\Cycle\CycleDayExportService;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 final class ExportCycleDayController
 {
-    public function __invoke(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations): BinaryFileResponse
+    public function __invoke(Routine $routine, CycleDay $day, CycleDayExportService $service): BinaryFileResponse
     {
-        $sheet = new CycleDayExport($routine, $day, $recommendations);
+        $sheet = $service->handle($routine, $day);
 
         return Excel::download($sheet, $sheet->filename);
     }

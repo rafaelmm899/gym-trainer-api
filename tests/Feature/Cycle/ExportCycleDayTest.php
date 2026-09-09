@@ -10,12 +10,12 @@ use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
 use App\Models\User;
-use App\Services\Recommendation\RecommendationCatalogService;
+use App\Services\Cycle\CycleDayExportService;
 use Dedoc\Scramble\Generator;
 use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
 
-// docs/plans/export-training-day-csv-spec.md §8, TC-1..TC-13.
+// docs/plans/export-training-day-csv-spec.md §8, Feature TC-13..TC-26.
 // (The route inheriting the root security scheme is asserted in
 // tests/Feature/Auth/DocsSecurityTest.php.)
 
@@ -31,7 +31,20 @@ function exportUrl(Routine $routine, CycleDay $day): string
 
 function expectedExportFilename(Routine $routine, CycleDay $day): string
 {
-    return (new CycleDayExport($routine, $day, app(RecommendationCatalogService::class)))->filename;
+    return app(CycleDayExportService::class)->handle($routine, $day)->filename;
+}
+
+/**
+ * The final sheet rows (each `map()` result flattened) of a `CycleDayExport`.
+ *
+ * @return list<list<string|int|float|null>>
+ */
+function renderedRows(CycleDayExport $export): array
+{
+    return $export->collection()
+        ->flatMap(fn (DayExercise $dayExercise): array => $export->map($dayExercise))
+        ->values()
+        ->all();
 }
 
 /**
@@ -54,7 +67,7 @@ function routineWithActiveDay(User $user, array $cycleAttributes = [], array $da
 // Feature — happy path
 // ---------------------------------------------------------------------------
 
-// TC-1
+// TC-13
 it('downloads the day as an .xlsx workbook scoped to that day', function () {
     Excel::fake();
 
@@ -62,18 +75,9 @@ it('downloads the day as an .xlsx workbook scoped to that day', function () {
     $cycle = Cycle::factory()->active()->for($routine)->create(['sequence_number' => 3]);
 
     $dayOne = CycleDay::factory()->for($cycle)->create(['order' => 1, 'label' => 'Empuje']);
-    $press = Exercise::factory()->create(['name' => 'Press banca']);
-    DayExercise::factory()->for($dayOne)->for($press)->create(['order' => 1]);
-    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($press)->create([
-        'status' => RecommendationStatus::Active,
-        'explanation' => 'solo dia 1',
-    ]);
+    DayExercise::factory()->for($dayOne)->for(Exercise::factory()->create(['name' => 'Press banca']))->create(['order' => 1]);
 
-    $dayThree = CycleDay::factory()->for($cycle)->create([
-        'order' => 3,
-        'label' => 'Piernas',
-        'focus_muscle_groups' => ['quads', 'glutes'],
-    ]);
+    $dayThree = CycleDay::factory()->for($cycle)->create(['order' => 3, 'label' => 'Piernas']);
     DayExercise::factory()->for($dayThree)->for(Exercise::factory()->create(['name' => 'Sentadilla']))
         ->create(['order' => 1, 'sets' => 4]);
     DayExercise::factory()->for($dayThree)->for(Exercise::factory()->create(['name' => 'Zancada']))
@@ -82,23 +86,23 @@ it('downloads the day as an .xlsx workbook scoped to that day', function () {
     $this->actingAs($this->user)->get(exportUrl($routine, $dayThree))->assertOk();
 
     Excel::assertDownloaded('volumen-invierno-ciclo-3-dia-3-piernas.xlsx', function (CycleDayExport $export): bool {
-        $data = $export->array();
+        $rows = renderedRows($export);
 
         expect($export->headings())->toBe([
             'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
             'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
         ])
-            ->and($data)->toHaveCount(7)
-            ->and(array_column($data, 0))->toBe(['Sentadilla', 'Sentadilla', 'Sentadilla', 'Sentadilla', 'Zancada', 'Zancada', 'Zancada'])
-            ->and(array_column($data, 1))->toBe([1, 2, 3, 4, 1, 2, 3])
-            ->and(collect($data)->every(fn (array $r): bool => $r[8] === null && $r[9] === null && $r[10] === null && $r[11] === null))->toBeTrue()
-            ->and(array_column($data, 0))->not->toContain('Press banca');
+            ->and($rows)->toHaveCount(7)
+            ->and(array_column($rows, 0))->toBe(['Sentadilla', 'Sentadilla', 'Sentadilla', 'Sentadilla', 'Zancada', 'Zancada', 'Zancada'])
+            ->and(array_column($rows, 1))->toBe([1, 2, 3, 4, 1, 2, 3])
+            ->and(collect($rows)->every(fn (array $r): bool => $r[8] === null && $r[9] === null && $r[10] === null && $r[11] === null))->toBeTrue()
+            ->and(array_column($rows, 0))->not->toContain('Press banca');
 
         return true;
     });
 });
 
-// TC-2
+// TC-14
 it('fills the recommended columns for an exercise with an active recommendation', function () {
     Excel::fake();
 
@@ -114,7 +118,27 @@ it('fills the recommended columns for an exercise with an active recommendation'
     $this->actingAs($this->user)->get(exportUrl($routine, $day))->assertOk();
 
     Excel::assertDownloaded(expectedExportFilename($routine, $day), function (CycleDayExport $export): bool {
-        expect(collect($export->array())->every(fn (array $r): bool => $r[6] === 102.5 && $r[7] === 'advance_weight'))->toBeTrue();
+        expect(collect(renderedRows($export))->every(fn (array $r): bool => $r[6] === 102.5 && $r[7] === 'advance_weight'))->toBeTrue();
+
+        return true;
+    });
+});
+
+// TC-15
+it('ignores an applied (non-active) recommendation', function () {
+    Excel::fake();
+
+    [$routine, $day] = routineWithActiveDay($this->user);
+    $squat = Exercise::factory()->create(['name' => 'Sentadilla']);
+    DayExercise::factory()->for($day)->for($squat)->create(['sets' => 1]);
+    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($squat)->create([
+        'status' => RecommendationStatus::Applied,
+    ]);
+
+    $this->actingAs($this->user)->get(exportUrl($routine, $day))->assertOk();
+
+    Excel::assertDownloaded(expectedExportFilename($routine, $day), function (CycleDayExport $export): bool {
+        expect(renderedRows($export)[0][6])->toBeNull()->and(renderedRows($export)[0][7])->toBeNull();
 
         return true;
     });
@@ -124,7 +148,7 @@ it('fills the recommended columns for an exercise with an active recommendation'
 // Feature — authorization & errors
 // ---------------------------------------------------------------------------
 
-// TC-3
+// TC-16
 it('rejects a {day} that belongs to another routine', function () {
     [$routine] = routineWithActiveDay($this->user);
     [, $foreignDay] = routineWithActiveDay(User::factory()->create());
@@ -135,7 +159,7 @@ it('rejects a {day} that belongs to another routine', function () {
         ->assertJsonPath('data.code', 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE');
 });
 
-// TC-4
+// TC-17
 it('rejects a {day} from a non-active cycle of the same routine', function () {
     $routine = Routine::factory()->for($this->user)->create();
     $oldCycle = Cycle::factory()->completed()->for($routine)->create(['sequence_number' => 1]);
@@ -148,7 +172,7 @@ it('rejects a {day} from a non-active cycle of the same routine', function () {
         ->assertJsonPath('data.code', 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE');
 });
 
-// TC-5
+// TC-18
 it('rejects a routine whose current cycle is not active', function () {
     $routine = Routine::factory()->for($this->user)->create();
     $cycle = Cycle::factory()->generating()->for($routine)->create();
@@ -160,7 +184,7 @@ it('rejects a routine whose current cycle is not active', function () {
         ->assertJsonPath('data.code', 'ROUTINE_HAS_NO_ACTIVE_CYCLE');
 });
 
-// TC-6
+// TC-19
 it('rejects an archived routine with ROUTINE_HAS_NO_ACTIVE_CYCLE', function () {
     $routine = Routine::factory()->for($this->user)->archived()->create();
     $cycle = Cycle::factory()->completed()->for($routine)->create();
@@ -172,7 +196,7 @@ it('rejects an archived routine with ROUTINE_HAS_NO_ACTIVE_CYCLE', function () {
         ->assertJsonPath('data.code', 'ROUTINE_HAS_NO_ACTIVE_CYCLE');
 });
 
-// TC-7
+// TC-20
 it('returns 403 for a routine owned by another user', function () {
     [$routine, $day] = routineWithActiveDay(User::factory()->create());
 
@@ -182,7 +206,7 @@ it('returns 403 for a routine owned by another user', function () {
         ->assertJsonPath('data.code', 'AUTHORIZATION_EXCEPTION');
 });
 
-// TC-8
+// TC-21
 it('returns 404 for an unknown routine uuid', function () {
     $this->actingAs($this->user)
         ->getJson('/api/v1/routines/'.Str::uuid()->toString().'/cycle-days/'.Str::uuid()->toString().'/export')
@@ -190,7 +214,7 @@ it('returns 404 for an unknown routine uuid', function () {
         ->assertJsonPath('data.code', 'NOT_FOUND_EXCEPTION');
 });
 
-// TC-9
+// TC-22
 it('returns 404 for an unknown day uuid', function () {
     $routine = Routine::factory()->for($this->user)->create();
     Cycle::factory()->active()->for($routine)->create();
@@ -201,7 +225,7 @@ it('returns 404 for an unknown day uuid', function () {
         ->assertJsonPath('data.code', 'NOT_FOUND_EXCEPTION');
 });
 
-// TC-10
+// TC-23
 it('returns 404 for a non-uuid path segment', function () {
     $this->actingAs($this->user)
         ->getJson('/api/v1/routines/not-a-uuid/cycle-days/also-bad/export')
@@ -209,7 +233,7 @@ it('returns 404 for a non-uuid path segment', function () {
         ->assertJsonPath('data.code', 'NOT_FOUND_EXCEPTION');
 });
 
-// TC-11
+// TC-24
 it('rejects an unauthenticated request', function () {
     [$routine, $day] = routineWithActiveDay($this->user);
 
@@ -218,25 +242,11 @@ it('rejects an unauthenticated request', function () {
         ->assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION');
 });
 
-// TC-12
-it('renders without tripping strict-mode lazy loading', function () {
-    Excel::fake();
+// ---------------------------------------------------------------------------
+// Feature — real file & docs
+// ---------------------------------------------------------------------------
 
-    [$routine, $day] = routineWithActiveDay($this->user);
-    $withRec = Exercise::factory()->create(['name' => 'A']);
-    DayExercise::factory()->for($day)->for($withRec)->create(['order' => 1, 'sets' => 2]);
-    DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'B']))->create(['order' => 2, 'sets' => 2]);
-    DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'C']))->create(['order' => 3, 'sets' => 1]);
-    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($withRec)->create([
-        'status' => RecommendationStatus::Active,
-    ]);
-
-    $this->actingAs($this->user)->get(exportUrl($routine, $day))->assertOk();
-
-    Excel::assertDownloaded(expectedExportFilename($routine, $day));
-});
-
-// TC-13
+// TC-25
 it('streams a genuine, non-empty xlsx file', function () {
     [$routine, $day] = routineWithActiveDay($this->user);
     DayExercise::factory()->for($day)->create(['sets' => 2]);
@@ -250,11 +260,7 @@ it('streams a genuine, non-empty xlsx file', function () {
     expect(substr($response->streamedContent(), 0, 2))->toBe('PK'); // xlsx is a zip archive
 });
 
-// ---------------------------------------------------------------------------
-// Feature — docs
-// ---------------------------------------------------------------------------
-
-// TC-14 (companion assertion; the security-scheme check is in DocsSecurityTest)
+// TC-26 (companion; the security-scheme check is in DocsSecurityTest)
 it('documents the export response as a spreadsheet, not application/json', function () {
     $spec = app(Generator::class)();
 
