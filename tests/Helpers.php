@@ -39,24 +39,6 @@ function iso8601Pattern(): string
 }
 
 /**
- * The `#` metadata lines from a `CycleDayExport::headings()` result — the
- * single-cell rows that start with `#`, header row dropped.
- *
- * @param  list<array<int, mixed>>  $headingRows
- * @return list<string>
- */
-function exportCommentLines(array $headingRows): array
-{
-    return array_values(array_map(
-        fn (array $row): string => (string) $row[0],
-        array_filter(
-            $headingRows,
-            fn (array $row): bool => count($row) === 1 && is_string($row[0]) && str_starts_with($row[0], '#'),
-        ),
-    ));
-}
-
-/**
  * A well-formed structured payload for the AI cycle planner: a 5-day split with
  * a full prescription per exercise. `array_replace_recursive` overrides let a
  * test bend one field (or swap `days` wholesale) to exercise a failure path.
