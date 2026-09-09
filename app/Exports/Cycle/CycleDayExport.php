@@ -14,21 +14,23 @@ use App\Services\Recommendation\RecommendationCatalogService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 use Maatwebsite\Excel\Concerns\FromArray;
+use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
 
 /**
- * The workbook a user downloads for one day of their routine's active cycle: a
- * single sheet with a `#` metadata prelude (day, split rationale, one line per
- * exercise with its rationale and current recommendation), the header row, then
- * one row per prescribed set. `null` cells stay blank
- * ({@see WithStrictNullComparison}) for the user to fill in.
+ * The workbook a user downloads for one day of their routine's active cycle. The
+ * {@see WithHeadings} block is the `#` metadata prelude (day, split rationale,
+ * one line per exercise with its rationale and current recommendation) followed
+ * by the column header row; the {@see FromArray} rows are one per prescribed
+ * set. `null` cells stay blank ({@see WithStrictNullComparison}) for the user to
+ * fill in.
  *
  * The constructor runs the business guards (so an invalid day fails before any
  * bytes are written) and assembles every row up front. The `#` text is Spanish,
  * from `lang/es/export.php`; v1 is single-locale, so the locale is pinned here
  * rather than taken from `APP_LOCALE`.
  */
-final class CycleDayExport implements FromArray, WithStrictNullComparison
+final class CycleDayExport implements FromArray, WithHeadings, WithStrictNullComparison
 {
     /** @var list<string> */
     private const HEADER = [
@@ -40,8 +42,11 @@ final class CycleDayExport implements FromArray, WithStrictNullComparison
 
     public readonly string $filename;
 
+    /** @var list<list<string>> */
+    private readonly array $headingRows;
+
     /** @var list<list<string|int|float|null>> */
-    private readonly array $rows;
+    private readonly array $dataRows;
 
     public function __construct(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations)
     {
@@ -56,7 +61,25 @@ final class CycleDayExport implements FromArray, WithStrictNullComparison
         $current = $recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id');
 
         $this->filename = $this->buildFilename($routine, $cycle, $day);
-        $this->rows = $this->buildRows($routine, $cycle, $day, $current);
+        $this->headingRows = [
+            ...array_map(
+                static fn (string $line): array => [$line],
+                $this->commentLines($routine, $cycle, $day, $current),
+            ),
+            self::HEADER,
+        ];
+        $this->dataRows = $this->buildDataRows($day, $current);
+    }
+
+    /**
+     * The `#` prelude lines then the column header row. Every element is an
+     * array, so Laravel Excel writes each as its own row above the data.
+     *
+     * @return list<list<string>>
+     */
+    public function headings(): array
+    {
+        return $this->headingRows;
     }
 
     /**
@@ -64,22 +87,16 @@ final class CycleDayExport implements FromArray, WithStrictNullComparison
      */
     public function array(): array
     {
-        return $this->rows;
+        return $this->dataRows;
     }
 
     /**
      * @param  Collection<int, ExerciseRecommendation>  $recommendations
      * @return list<list<string|int|float|null>>
      */
-    private function buildRows(Routine $routine, Cycle $cycle, CycleDay $day, Collection $recommendations): array
+    private function buildDataRows(CycleDay $day, Collection $recommendations): array
     {
-        $rows = array_map(
-            static fn (string $line): array => [$line],
-            $this->commentLines($routine, $cycle, $day, $recommendations),
-        );
-
-        $rows[] = self::HEADER;
-
+        $rows = [];
         $setNumberByExercise = [];
 
         foreach ($day->dayExercises as $dayExercise) {
@@ -139,7 +156,8 @@ final class CycleDayExport implements FromArray, WithStrictNullComparison
         $line = $this->line('comment.exercise', [
             ':exercise' => $dayExercise->exercise->name,
             ':prescription' => $this->prescription($dayExercise),
-            ':rationale' => $this->collapse($dayExercise->rationale),
+            // The template supplies the sentence-ending period after :rationale.
+            ':rationale' => rtrim($this->collapse($dayExercise->rationale), '.'),
         ]);
 
         if ($recommendation !== null) {

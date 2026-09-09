@@ -39,44 +39,21 @@ function iso8601Pattern(): string
 }
 
 /**
- * True for a `CycleDayExport` row that is a `#` metadata line (one string cell
- * starting with `#`), not a header/data row.
+ * The `#` metadata lines from a `CycleDayExport::headings()` result — the
+ * single-cell rows that start with `#`, header row dropped.
  *
- * @param  array<int, mixed>  $row
- */
-function isExportCommentRow(array $row): bool
-{
-    return count($row) === 1 && is_string($row[0]) && str_starts_with($row[0], '#');
-}
-
-/**
- * The `#` metadata lines of a `CycleDayExport` sheet.
- *
- * @param  list<array<int, mixed>>  $rows
+ * @param  list<array<int, mixed>>  $headingRows
  * @return list<string>
  */
-function exportCommentLines(array $rows): array
+function exportCommentLines(array $headingRows): array
 {
     return array_values(array_map(
         fn (array $row): string => (string) $row[0],
-        array_filter($rows, 'isExportCommentRow'),
+        array_filter(
+            $headingRows,
+            fn (array $row): bool => count($row) === 1 && is_string($row[0]) && str_starts_with($row[0], '#'),
+        ),
     ));
-}
-
-/**
- * The data rows of a `CycleDayExport` sheet — the `#` prelude and the header
- * row dropped.
- *
- * @param  list<array<int, mixed>>  $rows
- * @return list<array<int, mixed>>
- */
-function exportDataRows(array $rows): array
-{
-    $data = array_values(array_filter($rows, fn (array $row): bool => ! isExportCommentRow($row)));
-
-    array_shift($data); // header row
-
-    return array_values($data);
 }
 
 /**

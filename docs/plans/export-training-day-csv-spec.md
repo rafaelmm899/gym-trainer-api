@@ -141,17 +141,25 @@ Notes:
 
 **Workbook shape** (§2.1.1)
 
-One sheet. Rows, in order:
+One sheet. `CycleDayExport` implements **`WithHeadings`** (multi-row: every
+element of `headings()` is itself an array, so Laravel Excel writes each as a
+row) and **`FromArray`**. Laravel Excel writes the headings block first, then the
+array rows — so the sheet is:
 
-**1. Comment prelude** — one row per `#` line, a single string cell in column A
-(`['# rutina: …']`). Not a CSV comment syntax — just text rows a reader
-(a test here, the Order-154 importer later) skips until it reaches the header
-row. Interpolated rationales / explanations have their whitespace collapsed to
-single spaces (`preg_replace('/\s+/', ' ', trim($v))`) so each stays one line.
-Strings come from `lang/es/export.php`: the template is fetched with
-`trans('export.…', [], 'es')` (raw `:token` template back), then filled with
-`strtr` (simultaneous — a value containing `:token` is never re-expanded;
-string-cast).
+1. the `#` comment prelude (headings), one single-cell row per `#` line;
+2. the column header row (the last headings row);
+3. one `FromArray` row per prescribed set.
+
+**1. Comment prelude** — one `headings()` row per `#` line, a single string cell
+in column A (`['# rutina: …']`). Not a CSV comment syntax — just text rows a
+reader (a test here, the Order-154 importer later) skips until it reaches the
+header row. Interpolated rationales / explanations have their whitespace
+collapsed to single spaces (`preg_replace('/\s+/', ' ', trim($v))`) so each
+stays one line; a trailing `.` is trimmed from `<dayExercise.rationale>` (the
+template already supplies the sentence-ending period). Strings come from
+`lang/es/export.php`: the template is fetched with `trans('export.…', [], 'es')`
+(raw `:token` template back), then filled with `strtr` (simultaneous — a value
+containing `:token` is never re-expanded; string-cast).
 
 ```
 # rutina: <routine.name> | ciclo <cycle.sequence_number> | dia <cycleDay.order> (<cycleDay.label>) | foco: <focus_muscle_groups joined by ", ">
@@ -177,16 +185,16 @@ string-cast).
     backed enum value (`advance_weight`, …) — the same token as the
     `recommended_action` column, not a translated label.
 
-**2. Header row** — exactly:
+**2. Header row** — the final `headings()` row, exactly:
 
 ```
 exercise · set_number · prescribed_weight_kg · prescribed_reps · prescribed_rpe · rest_seconds · recommended_weight_kg · recommended_action · weight_kg · reps · rpe · note
 ```
 
-**3. Data rows** — walk `day_exercises` by `order` asc; for each, emit `sets`
-rows. Native cell types (the point of `.xlsx` over CSV); `null` cells stay blank
-(`Maatwebsite\Excel\Concerns\WithStrictNullComparison`), so the user types into
-truly empty cells.
+**3. Data rows** — `array()`. Walk `day_exercises` by `order` asc; for each, emit
+`sets` rows. Native cell types (the point of `.xlsx` over CSV); `null` cells stay
+blank (`Maatwebsite\Excel\Concerns\WithStrictNullComparison`), so the user types
+into truly empty cells.
 
 | Column | Value / type |
 |---|---|
@@ -333,8 +341,9 @@ with a single separating space added in code.
 `tests/Unit/Cycle/CycleDayExportTest.php`. Factories + states only; no real AI,
 no network. `Excel::fake()` (from `Maatwebsite\Excel\Facades\Excel`) is used per
 feature test that inspects the downloaded export; the shared `tests/Helpers.php`
-gains `exportCommentLines(array $rows)` / `exportDataRows(array $rows)` to split
-a `CycleDayExport::array()` result.*
+gains `exportCommentLines(array $headingRows)` — the `#` lines from a
+`CycleDayExport::headings()` result. Data rows are read straight from
+`CycleDayExport::array()`.*
 
 **Feature — happy path**
 
@@ -409,10 +418,10 @@ key and no `application/json` key.
 **Unit — `CycleDayExport`**
 
 *Each builds the graph with factories, then `new CycleDayExport($routine, $day,
-app(RecommendationCatalogService::class))` and inspects `->array()` /
-`->filename`.*
+app(RecommendationCatalogService::class))` and inspects `->headings()` /
+`->array()` / `->filename`.*
 
-**TC-14:** the `->array()` result contains the exact header row.
+**TC-14:** the last row of `->headings()` is the exact 12-name column header.
 
 **TC-15:** `sets` data rows per `day_exercise`, `set_number` `1,2,3` (ints).
 
@@ -456,8 +465,8 @@ embedded `\n`.
 export day 2, and day 1's exercise name appears in neither the comment lines nor
 the data rows.
 
-**TC-27:** a day with zero `day_exercises` → `exportDataRows()` is empty; the
-first comment line starts `# rutina:`.
+**TC-27:** a day with zero `day_exercises` → `->array()` is empty; the first
+`->headings()` comment line starts `# rutina:`.
 
 ---
 
@@ -466,8 +475,9 @@ first comment line starts `# rutina:`.
 | Decision area | What was decided | Why |
 |---|---|---|
 | Output format | `.xlsx`, not CSV. | The story says CSV, but a CSV cannot carry a raw `#` comment prelude *and* comma-safe data rows through one writer (a spreadsheet writer quotes any cell containing a comma, and the `#` lines contain commas). Decided with the user this session: switch to `.xlsx`, where a cell can hold a comma freely. |
-| Library | `maatwebsite/excel` `^4.0` (Laravel Excel). | The user asked for it explicitly (dependency approved). Gives a declarative `FromArray` export and `Excel::download()` / `Excel::fake()` testing helpers instead of hand-rolling a spreadsheet. |
-| No Service | `App\Exports\Cycle\CycleDayExport` owns the guards, recommendation lookup, `#`/row assembly and filename; the controller injects `RecommendationCatalogService` and passes it in. | Decided with the user this session ("ya no necesitaríamos el service"). A Laravel Excel export idiomatically gathers its own data; a separate Service on top would be indirection (`CLAUDE.md` rule 6). The guards run in the constructor, so an invalid day fails before `Excel::download()` — the JSON error path is unchanged. |
+| Library | `maatwebsite/excel` `^4.0` (Laravel Excel). | The user asked for it explicitly (dependency approved). Gives declarative concerns (`FromArray`, `WithHeadings`, `WithStrictNullComparison`) and `Excel::download()` / `Excel::fake()` testing helpers instead of hand-rolling a spreadsheet. `^3.1` is not an option — it caps at Laravel 11; this app is on Laravel 13. |
+| Top matter via `WithHeadings` | `headings()` returns the `#` prelude lines (each `['# …']`) **plus** the column header row as its last element — a multi-row headings block (every element an array). `array()` returns only the data rows. | Requested by the user ("usa los métodos WithHeadings"). Laravel Excel writes the headings block before the `FromArray` rows, which is exactly the prelude → header → data order we want, and keeps `array()` purely the prescribed-set rows. |
+| No Service | `App\Exports\Cycle\CycleDayExport` owns the guards, recommendation lookup, headings + row assembly and filename; the controller injects `RecommendationCatalogService` and passes it in. | Decided with the user this session ("ya no necesitaríamos el service"). A Laravel Excel export idiomatically gathers its own data; a separate Service on top would be indirection (`CLAUDE.md` rule 6). The guards run in the constructor, so an invalid day fails before `Excel::download()` — the JSON error path is unchanged. |
 | Guards throw from a constructor | `CycleDayExport::__construct()` runs `throw_if` / `throw_unless`. | The export is a single-use, per-request value object; building it *is* "handle this request". Throwing here keeps the error before any bytes are written and keeps the controller at ~3 lines. |
 | `{day}` identifier | `cycle_days.uuid` + route-model binding (not `order` 1..N). | Consistency with `POST .../sessions`. Resolved with the user. |
 | Foreign routine | `403` via the existing `->can('view', 'routine')` (not `404`). | Consistency with `routines.show` / `routines/{routine}/recommendations`. Resolved with the user. |
@@ -493,11 +503,11 @@ first comment line starts `# rutina:`.
 | 3 | Create `lang/es/export.php` with the keys in §6. | `trans('export.comment.day', [], 'es')` returns the Spanish template. |
 | 4 | Create `app/Exceptions/Cycle/RoutineHasNoActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'ROUTINE_HAS_NO_ACTIVE_CYCLE'`, `$statusCode = Response::HTTP_UNPROCESSABLE_ENTITY`, default message. | `->statusCode() === 422`, `->errorCode() === 'ROUTINE_HAS_NO_ACTIVE_CYCLE'` (locked by TC-22 in Task 8). |
 | 5 | Create `app/Exceptions/Cycle/CycleDayNotInActiveCycleException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE'`, `$statusCode = 422`, default message. PHPDoc cross-references the Session-domain `409` sibling. | `->statusCode() === 422` (locked by TC-23 in Task 8). |
-| 6 | Create `app/Exports/Cycle/CycleDayExport.php` — `final`, implements `FromArray` + `WithStrictNullComparison`. Constructor `(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations)`: (a) `$cycle = $routine->cycle()->first()`; `throw_if($cycle === null \|\| $cycle->status !== CycleStatus::Active, new RoutineHasNoActiveCycleException)`; (b) `throw_unless($day->cycle_id === $cycle->id, new CycleDayNotInActiveCycleException)`; (c) `$day->loadMissing('dayExercises.exercise')`; (d) `$recs = $recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id')`; (e) store `public readonly string $filename` (slugged per §2.1.2, `.xlsx`) and `private readonly array $rows` (comment rows as `[$line]`, then `HEADER`, then data rows per §2.1.1 — `set_number` counted per `exercise_id`, decimals as `?float`, blanks as `null`, `#` text via `strtr` on `trans(..., 'es')` with whitespace-collapsed rationales). `array(): array` returns `$this->rows`. A one-line comment notes the pinned `es` locale. | `vendor/bin/phpstan analyse` clean; behaviour locked by TC-14–TC-27 in Task 8. |
+| 6 | Create `app/Exports/Cycle/CycleDayExport.php` — `final`, implements `FromArray` + `WithHeadings` + `WithStrictNullComparison`. Constructor `(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations)`: (a) `$cycle = $routine->cycle()->first()`; `throw_if($cycle === null \|\| $cycle->status !== CycleStatus::Active, new RoutineHasNoActiveCycleException)`; (b) `throw_unless($day->cycle_id === $cycle->id, new CycleDayNotInActiveCycleException)`; (c) `$day->loadMissing('dayExercises.exercise')`; (d) `$recs = $recommendations->listCurrentForRoutine($routine)->keyBy('exercise_id')`; (e) store `public readonly string $filename` (slugged per §2.1.2, `.xlsx`), `private readonly array $headingRows` (`[['# …'], …, HEADER]`) and `private readonly array $dataRows` (per §2.1.1 — `set_number` per `exercise_id`, decimals as `?float`, blanks as `null`, trailing `.` trimmed from the rationale, `#` text via `strtr` on `trans(..., 'es')`). `headings()` returns `$this->headingRows`; `array()` returns `$this->dataRows`. A one-line comment notes the pinned `es` locale. | `vendor/bin/phpstan analyse` clean; behaviour locked by TC-14–TC-27 in Task 8. |
 | 7 | Create `app/Http/Controllers/Cycle/ExportCycleDayController.php` — invokable, `__invoke(Routine $routine, CycleDay $day, RecommendationCatalogService $recommendations): BinaryFileResponse` → `$sheet = new CycleDayExport($routine, $day, $recommendations); return Excel::download($sheet, $sheet->filename);`. Register the route in `routes/api.php` inside the `auth:sanctum` group after `routines.recommendations.list`: `->whereUuid('routine')->whereUuid('day')->can('view', 'routine')->name('routines.cycle-days.export')`, with a short comment. Add the controller import alphabetically. | `arch('cycle controllers are invokable')` passes; `php artisan route:list` shows `routines.cycle-days.export` (GET, `auth:sanctum`, `can:view,routine`). |
 | 8 | Add `AppServiceProvider::configureApiDocs()` (called from `boot()`): `Scramble::configure()->withOperationTransformers(...)` — for route name `routines.cycle-days.export`, set `$operation->responses` to a single `200` `Response` whose content type is `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`. | The Scramble companion feature test passes: `…/export` `get.responses.200.content` has the spreadsheet mime, no `application/json`. |
 | 9 | Extend `tests/Feature/Auth/DocsSecurityTest.php`: assert `$spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get']` has no `security` key. | `vendor/bin/pest --filter=DocsSecurity` passes. |
-| 10 | Add `exportCommentLines()` / `exportDataRows()` (and an `isExportCommentRow()` predicate) to `tests/Helpers.php`. | Both helpers usable from feature and unit tests. |
+| 10 | Add `exportCommentLines(array $headingRows)` to `tests/Helpers.php` — the `#` lines from a `CycleDayExport::headings()` result. | Usable from feature and unit tests. |
 | 11 | Write `tests/Unit/Cycle/CycleDayExportTest.php` — TC-14 through TC-27, each its own `it()`. | `vendor/bin/pest tests/Unit/Cycle/CycleDayExportTest.php` green. |
 | 12 | Write `tests/Feature/Cycle/ExportCycleDayTest.php` — TC-1 through TC-13 plus the Scramble companion, each its own `it()`, following `tests/Feature/Cycle/GenerateCycleTest.php` / `ListRoutineRecommendationsTest.php`. `Excel::fake()` per test that inspects the export; TC-13 stays real. | `vendor/bin/pest tests/Feature/Cycle/ExportCycleDayTest.php` green. |
 | 13 | Run the project checks: `vendor/bin/pint app tests routes/api.php lang --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Cycle` plus `--filter=DocsSecurity`, then the full `vendor/bin/pest`. | Pint clean, PHPStan level 6 clean, all tests green. No migration → no `ide-helper:models`, no DB clone. |

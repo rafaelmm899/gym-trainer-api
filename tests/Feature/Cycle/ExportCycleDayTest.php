@@ -82,12 +82,11 @@ it('downloads the day as an .xlsx workbook scoped to that day', function () {
     $this->actingAs($this->user)->get(exportUrl($routine, $dayThree))->assertOk();
 
     Excel::assertDownloaded('volumen-invierno-ciclo-3-dia-3-piernas.xlsx', function (CycleDayExport $export): bool {
-        $rows = $export->array();
-        $comments = exportCommentLines($rows);
-        $data = exportDataRows($rows);
+        $comments = exportCommentLines($export->headings());
+        $data = $export->array();
 
         expect($comments[0])->toBe('# rutina: Volumen invierno | ciclo 3 | dia 3 (Piernas) | foco: quads, glutes')
-            ->and($rows)->toContain([
+            ->and($export->headings())->toContain([
                 'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
                 'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
             ])
@@ -119,10 +118,10 @@ it('fills the recommended columns and the # line for an exercise with an active 
     $this->actingAs($this->user)->get(exportUrl($routine, $day))->assertOk();
 
     Excel::assertDownloaded(expectedExportFilename($routine, $day), function (CycleDayExport $export): bool {
-        $data = exportDataRows($export->array());
+        $data = $export->array();
 
         expect(collect($data)->every(fn (array $r): bool => $r[6] === 102.5 && $r[7] === 'advance_weight'))->toBeTrue()
-            ->and(implode("\n", exportCommentLines($export->array())))
+            ->and(implode("\n", exportCommentLines($export->headings())))
             ->toContain('Recomendacion: advance_weight — Subiste las 4x5 a RPE 7');
 
         return true;

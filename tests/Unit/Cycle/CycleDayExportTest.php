@@ -25,14 +25,6 @@ function exportFor(Routine $routine, CycleDay $day): CycleDayExport
 }
 
 /**
- * @return list<array<int, mixed>>
- */
-function exportRows(Routine $routine, CycleDay $day): array
-{
-    return exportFor($routine, $day)->array();
-}
-
-/**
  * A routine owned by a fresh user with one `active` cycle and one day.
  *
  * @param  array<string, mixed>  $cycleAttributes
@@ -49,25 +41,24 @@ function exportActiveDay(array $cycleAttributes = [], array $dayAttributes = [])
 }
 
 // TC-14
-it('builds a CycleDayExport whose header row is exact', function () {
+it('puts the exact column header at the end of the headings block', function () {
     [$routine, $day] = exportActiveDay();
     DayExercise::factory()->for($day)->create();
 
-    $export = exportFor($routine, $day);
+    $headings = exportFor($routine, $day)->headings();
 
-    expect($export)->toBeInstanceOf(CycleDayExport::class)
-        ->and($export->array())->toContain([
-            'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
-            'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
-        ]);
+    expect(end($headings))->toBe([
+        'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
+        'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+    ]);
 });
 
 // TC-15
-it('emits one row per prescribed set with a contiguous set_number', function () {
+it('emits one data row per prescribed set with a contiguous set_number', function () {
     [$routine, $day] = exportActiveDay();
     DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'X']))->create(['sets' => 3]);
 
-    $data = exportDataRows(exportRows($routine, $day));
+    $data = exportFor($routine, $day)->array();
 
     expect($data)->toHaveCount(3)
         ->and(array_column($data, 0))->toBe(['X', 'X', 'X'])
@@ -82,9 +73,12 @@ it('renders prescribed_reps as an integer or a range string', function () {
     DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'B']))
         ->create(['order' => 2, 'sets' => 1, 'rep_min' => 8, 'rep_max' => 12]);
 
-    $rows = exportRows($routine, $day);
-    $data = exportDataRows($rows);
-    $prescriptions = array_values(array_filter(exportCommentLines($rows), fn (string $l): bool => str_contains($l, 'prescripcion:')));
+    $export = exportFor($routine, $day);
+    $data = $export->array();
+    $prescriptions = array_values(array_filter(
+        exportCommentLines($export->headings()),
+        fn (string $l): bool => str_contains($l, 'prescripcion:'),
+    ));
 
     expect($data[0][3])->toBe(5)
         ->and($data[1][3])->toBe('8-12')
@@ -102,12 +96,12 @@ it('leaves prescribed weight and rpe blank and trims the # fragment when null', 
         'sets' => 2,
     ]);
 
-    $rows = exportRows($routine, $day);
-    $data = exportDataRows($rows);
-    $prescription = collect(exportCommentLines($rows))->first(fn (string $l): bool => str_contains($l, 'prescripcion:'));
+    $export = exportFor($routine, $day);
+    $prescription = collect(exportCommentLines($export->headings()))
+        ->first(fn (string $l): bool => str_contains($l, 'prescripcion:'));
 
-    expect($data[0][2])->toBeNull()
-        ->and($data[0][4])->toBeNull()
+    expect($export->array()[0][2])->toBeNull()
+        ->and($export->array()[0][4])->toBeNull()
         ->and($prescription)->toContain('descanso 90s')
         ->and($prescription)->not->toContain('@')
         ->and($prescription)->not->toContain('RPE');
@@ -137,7 +131,7 @@ it('fills the recommended columns only from an active recommendation', function 
         'status' => RecommendationStatus::Applied,
     ]);
 
-    $data = exportDataRows(exportRows($routine, $day));
+    $data = exportFor($routine, $day)->array();
 
     expect($data[0][6])->toBe(80.0)->and($data[0][7])->toBe('hold')
         ->and($data[1][6])->toBeNull()->and($data[1][7])->toBeNull()
@@ -152,9 +146,9 @@ it('includes the split rationale line only when the cycle has one', function () 
     [$withoutRationale, $day2] = exportActiveDay(['split_rationale' => null]);
     DayExercise::factory()->for($day2)->create();
 
-    expect(exportCommentLines(exportRows($withRationale, $day1)))
+    expect(exportCommentLines(exportFor($withRationale, $day1)->headings()))
         ->toContain('# racional del split: Empuje primero')
-        ->and(implode("\n", exportCommentLines(exportRows($withoutRationale, $day2))))
+        ->and(implode("\n", exportCommentLines(exportFor($withoutRationale, $day2)->headings())))
         ->not->toContain('racional del split');
 });
 
@@ -173,7 +167,7 @@ it('collapses newlines in rationale and explanation to single spaces', function 
         'action' => RecommendationAction::Hold,
     ]);
 
-    $line = collect(exportCommentLines(exportRows($routine, $day)))
+    $line = collect(exportCommentLines(exportFor($routine, $day)->headings()))
         ->first(fn (string $l): bool => str_starts_with($l, '# Sentadilla'));
 
     expect($line)->toContain('Racional: line one line two')
@@ -230,7 +224,7 @@ it('gives the same exercise prescribed twice a continuous set_number', function 
     DayExercise::factory()->for($day)->for($squat)->create(['order' => 1, 'sets' => 4, 'target_weight_kg' => 100]);
     DayExercise::factory()->for($day)->for($squat)->create(['order' => 2, 'sets' => 3, 'target_weight_kg' => 80]);
 
-    $data = exportDataRows(exportRows($routine, $day));
+    $data = exportFor($routine, $day)->array();
 
     expect($data)->toHaveCount(7)
         ->and(array_column($data, 0))->toBe(array_fill(0, 7, 'Sentadilla'))
@@ -244,7 +238,7 @@ it('orders rows by day_exercise.order', function () {
     DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'B']))->create(['order' => 2, 'sets' => 1]);
     DayExercise::factory()->for($day)->for(Exercise::factory()->create(['name' => 'A']))->create(['order' => 1, 'sets' => 1]);
 
-    expect(array_column(exportDataRows(exportRows($routine, $day)), 0))->toBe(['A', 'B']);
+    expect(array_column(exportFor($routine, $day)->array(), 0))->toBe(['A', 'B']);
 });
 
 // TC-26
@@ -258,18 +252,18 @@ it('scopes the workbook to the requested day only', function () {
     $target = CycleDay::factory()->for($cycle)->create(['order' => 2]);
     DayExercise::factory()->for($target)->for(Exercise::factory()->create(['name' => 'Sentadilla']))->create(['sets' => 1]);
 
-    $rows = exportRows($routine, $target);
-    $flat = implode("\n", exportCommentLines($rows)).implode(',', array_column(exportDataRows($rows), 0));
+    $export = exportFor($routine, $target);
+    $flat = implode("\n", exportCommentLines($export->headings())).implode(',', array_column($export->array(), 0));
 
     expect($flat)->toContain('Sentadilla')->not->toContain('Press banca');
 });
 
 // TC-27
-it('exports a day with zero exercises: prelude + header only', function () {
+it('exports a day with zero exercises: prelude + header, no data rows', function () {
     [$routine, $day] = exportActiveDay();
 
-    $rows = exportRows($routine, $day);
+    $export = exportFor($routine, $day);
 
-    expect(exportDataRows($rows))->toBeEmpty()
-        ->and(exportCommentLines($rows)[0])->toStartWith('# rutina:');
+    expect($export->array())->toBeEmpty()
+        ->and(exportCommentLines($export->headings())[0])->toStartWith('# rutina:');
 });
