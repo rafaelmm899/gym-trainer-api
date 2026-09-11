@@ -23,6 +23,7 @@ it('documents auth with a cookie scheme and keeps the public routes open', funct
         ->and($spec['paths']['/api/v1/routines']['post'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/routines']['get'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/routines/{routine}']['get'])->not->toHaveKey('security')
+        ->and($spec['paths']['/api/v1/routines/{routine}/cycle-days/{day}/export']['get'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/routines/{routine}/sessions']['post'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/exercises']['get'])->not->toHaveKey('security')
         ->and($spec['paths']['/api/v1/sessions/{session}/sets']['post'])->not->toHaveKey('security')

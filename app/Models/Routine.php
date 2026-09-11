@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Enums\Cycle\CycleStatus;
+use App\Enums\Recommendation\RecommendationStatus;
 use App\Enums\Routine\RoutineStatus;
 use App\Enums\Shared\Goal;
 use App\Models\Concerns\HasPublicUuid;
@@ -31,6 +33,9 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read Collection<int, Cycle> $cycles
  * @property-read int|null $cycles_count
  * @property-read Cycle|null $cycle
+ * @property-read Cycle|null $activeCycle
+ * @property-read Collection<int, ExerciseRecommendation> $activeExerciseRecommendations
+ * @property-read int|null $active_exercise_recommendations_count
  * @property-read Collection<int, TrainingSession> $trainingSessions
  * @property-read int|null $training_sessions_count
  *
@@ -110,6 +115,29 @@ class Routine extends Model
     public function cycle(): HasOne
     {
         return $this->hasOne(Cycle::class)->ofMany('sequence_number', 'max');
+    }
+
+    /**
+     * The routine's `active` cycle — the week currently being trained. A routine
+     * has exactly one at a time (product invariant); `null` while cycle N+1 is
+     * still `generating`, or once the routine is `archived`.
+     *
+     * @return HasOne<Cycle, $this>
+     */
+    public function activeCycle(): HasOne
+    {
+        return $this->hasOne(Cycle::class)->where('status', CycleStatus::Active);
+    }
+
+    /**
+     * The `active` (not yet folded into a cycle) exercise recommendations for
+     * this routine, one per `(exercise)`.
+     *
+     * @return HasMany<ExerciseRecommendation, $this>
+     */
+    public function activeExerciseRecommendations(): HasMany
+    {
+        return $this->hasMany(ExerciseRecommendation::class)->where('status', RecommendationStatus::Active);
     }
 
     /**
