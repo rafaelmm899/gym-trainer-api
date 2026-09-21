@@ -5,9 +5,14 @@ use App\Ai\Agents\Recommendation\SessionAnalystAgent;
 use App\Models\Cycle;
 use App\Models\CycleDay;
 use App\Models\DayExercise;
+use App\Models\Exercise;
 use App\Models\Routine;
 use App\Models\TrainingSession;
 use App\Models\User;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Str;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 /*
 |--------------------------------------------------------------------------
@@ -176,4 +181,94 @@ function openFreeSession(User $user): TrainingSession
     $routine = $user->routines()->first() ?? Routine::factory()->for($user)->create();
 
     return TrainingSession::factory()->for($user)->for($routine)->create();
+}
+
+/**
+ * A routine owned by the given user with one `active` cycle and one day — the
+ * fixture the import tests build on. Named distinctly from
+ * `ExportCycleDayTest.php`'s own file-local `routineWithActiveDay()` to avoid
+ * a global function redeclaration when the full suite runs.
+ *
+ * @return array{0: Routine, 1: CycleDay}
+ */
+function importRoutineWithActiveDay(User $user): array
+{
+    $routine = Routine::factory()->for($user)->create();
+    $cycle = Cycle::factory()->active()->for($routine)->create();
+    $day = CycleDay::factory()->for($cycle)->create();
+
+    return [$routine, $day];
+}
+
+/**
+ * Prescribes one exercise (named `$name`) on `$day`. Sets the catalog `slug`
+ * explicitly — `Exercise::factory()->create(['name' => ...])` alone leaves the
+ * factory's own random `slug` untouched, which the import's exercise-matching
+ * depends on.
+ */
+function prescribeExercise(CycleDay $day, string $name, int $order = 1): DayExercise
+{
+    $exercise = Exercise::factory()->create(['name' => $name, 'slug' => Str::slug(Str::ascii($name))]);
+
+    return DayExercise::factory()->for($day)->for($exercise)->create(['order' => $order]);
+}
+
+/**
+ * One row for {@see buildXlsxUploadedFile()}, in the import's own column
+ * shape — the `prescribed_*` / `recommended_*` columns are read-only context
+ * the import ignores, so only the actuals need filling in per test.
+ *
+ * @return array<string, mixed>
+ */
+function importRow(?string $exercise, mixed $weightKg = null, mixed $reps = null, mixed $rpe = null, ?string $note = null): array
+{
+    return [
+        'exercise' => $exercise,
+        'weight_kg' => $weightKg,
+        'reps' => $reps,
+        'rpe' => $rpe,
+        'note' => $note,
+    ];
+}
+
+/**
+ * A real, readable `.xlsx` `UploadedFile` — the header row from
+ * `App\Exports\Cycle\CycleDayExport::headings()`, then one data row per entry
+ * of `$rows` ({@see importRow()} shape; missing keys write blank cells).
+ * Built with `phpoffice/phpspreadsheet` directly (not `Excel::fake()`) so
+ * `CycleDayImportService` exercises its real reader in every test.
+ *
+ * @param  list<array<string, mixed>>  $rows
+ */
+function buildXlsxUploadedFile(array $rows, string $filename = 'import.xlsx'): UploadedFile
+{
+    $headings = [
+        'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
+        'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+    ];
+
+    $spreadsheet = new Spreadsheet;
+    $sheet = $spreadsheet->getActiveSheet();
+    // `strictNullComparison: true` — fromArray()'s default loose `!=` treats a
+    // literal `0` the same as its null sentinel and silently skips the cell.
+    $sheet->fromArray($headings, null, 'A1', true);
+
+    foreach ($rows as $index => $row) {
+        $ordered = array_map(fn (string $heading): mixed => $row[$heading] ?? null, $headings);
+        $sheet->fromArray($ordered, null, 'A'.($index + 2), true);
+    }
+
+    $path = tempnam(sys_get_temp_dir(), 'xlsx_import_').'.xlsx';
+    (new Xlsx($spreadsheet))->save($path);
+
+    return new UploadedFile($path, $filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', null, true);
+}
+
+/**
+ * A garbage `.xlsx`-named `UploadedFile` whose content is not a real
+ * spreadsheet — exercises the "unreadable file" path.
+ */
+function buildUnreadableXlsxUploadedFile(string $filename = 'corrupt.xlsx'): UploadedFile
+{
+    return UploadedFile::fake()->create($filename, 5);
 }

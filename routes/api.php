@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\LogoutController;
 use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\Cycle\ExportCycleDayController;
 use App\Http\Controllers\Cycle\GenerateCycleController;
+use App\Http\Controllers\Cycle\ImportCycleDayController;
 use App\Http\Controllers\Exercise\ListExercisesController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
@@ -66,6 +67,15 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('day')
         ->can('view', 'routine')
         ->name('routines.cycle-days.export');
+
+    // Import a filled day (the export's own .xlsx, re-uploaded): opens the
+    // session, logs every filled set, completes it, in one atomic request.
+    // The Form Request delegates authorization to TrainingSessionPolicy::create
+    // (the same ability POST .../sessions uses) rather than a new ability.
+    Route::post('routines/{routine}/cycle-days/{day}/import', ImportCycleDayController::class)
+        ->whereUuid('routine')
+        ->whereUuid('day')
+        ->name('routines.cycle-days.import');
 
     // Generate cycle N+1, synchronously and all-or-nothing (same shape as
     // routines.store). RoutinePolicy::generateCycle gates ownership; whether
