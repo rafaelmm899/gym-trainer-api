@@ -18,16 +18,20 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Validators\Failure;
+use Maatwebsite\Excel\Validators\ValidationException as ExcelValidationException;
 use Throwable;
 
 /**
  * Turns "import this filled day" into ready-to-log data: guard the routine's
  * active cycle, that the day belongs to it, and that the day was not already
- * completed; read the uploaded workbook; match each filled row's `exercise`
- * cell to one of the day's prescriptions; validate `weight_kg` / `reps` /
- * `rpe`; and number each matched exercise's sets contiguously from row order.
- * No writes — {@see TrainingSessionImportAction} does
- * those, inside its own transaction, with the {@see LogSetData} this returns.
+ * completed; read the uploaded workbook through `CycleDayImport`, which does
+ * the actual field validation via Laravel Excel's own `WithValidation`
+ * pipeline; then turn every filled row into a `LogSetData`, numbering each
+ * matched exercise's sets contiguously from row order — the one piece of this
+ * that is domain logic, not a file-format concern. No writes — {@see
+ * TrainingSessionImportAction} does those, inside its own transaction, with
+ * the `LogSetData` this returns.
  */
 final class CycleDayImportService
 {
@@ -50,37 +54,56 @@ final class CycleDayImportService
         );
 
         $day->loadMissing('dayExercises.exercise');
+        $dayExercisesBySlug = $this->dayExercisesBySlug($day->dayExercises);
 
-        return $this->parseRows($this->readSheet($file), $this->dayExercisesBySlug($day->dayExercises));
+        return $this->toLogSetData($this->readSheet($file, $dayExercisesBySlug), $dayExercisesBySlug);
     }
 
     /**
-     * @return Collection<int, array<string, mixed>>
+     * `Excel::import()` — not `Excel::toCollection()` — is the entrypoint that
+     * actually runs the `WithValidation` pipeline: `toCollection()` only reads
+     * the raw grid and never calls `$import->collection()` at all.
+     *
+     * @param  Collection<string, DayExercise>  $dayExercisesBySlug
+     * @return Collection<int, Collection<string, mixed>>
      */
-    private function readSheet(UploadedFile $file): Collection
+    private function readSheet(UploadedFile $file, Collection $dayExercisesBySlug): Collection
     {
-        // `UnreadableFileException` (and friends) surface for anything from a
-        // truncated upload to a renamed non-spreadsheet file — folded into the
-        // same row-error envelope as everything else the caller can fix.
+        $import = new CycleDayImport($dayExercisesBySlug);
+
         try {
-            $rows = Excel::toCollection(new CycleDayImport, $file)->first();
-        } catch (Throwable) {
-            $rows = null;
+            Excel::import($import, $file);
+        } catch (Throwable $e) {
+            // Re-keyed from the library's own per-row Failure objects (which
+            // already carry the real spreadsheet row number) into this API's
+            // one `{field: [msg]}` VALIDATION_EXCEPTION envelope — the
+            // library's own `errors()` returns a plain message list, not that
+            // shape. Anything else (a corrupt or unparseable upload) folds
+            // into the same envelope under `file`.
+            throw ValidationException::withMessages(
+                $e instanceof ExcelValidationException
+                    ? $this->rowErrors($e->failures())
+                    : ['file' => ['The uploaded file could not be read as a valid .xlsx spreadsheet.']],
+            );
         }
 
-        if ($rows === null) {
-            throw ValidationException::withMessages([
-                'file' => ['The uploaded file could not be read as a valid .xlsx spreadsheet.'],
-            ]);
+        return $import->rows();
+    }
+
+    /**
+     * @param  array<int, Failure>  $failures
+     * @return array<string, list<string>>
+     */
+    private function rowErrors(array $failures): array
+    {
+        $errors = [];
+
+        foreach ($failures as $failure) {
+            $key = "row_{$failure->row()}.{$failure->attribute()}";
+            $errors[$key] = array_merge($errors[$key] ?? [], $failure->errors());
         }
 
-        /** @var Collection<int, Collection<string, mixed>> $rows */
-        return $rows->map(function (Collection $row): array {
-            /** @var array<string, mixed> $array */
-            $array = $row->toArray();
-
-            return $array;
-        });
+        return $errors;
     }
 
     /**
@@ -101,38 +124,30 @@ final class CycleDayImportService
     }
 
     /**
-     * @param  Collection<int, array<string, mixed>>  $rows
+     * Every row here already passed `CycleDayImport`'s validation (or was
+     * never subject to it). "Filled" — both `weight_kg` and `reps` present —
+     * is checked again here because the gate only skips *validating* an
+     * unfilled row, not returning it.
+     *
+     * @param  Collection<int, Collection<string, mixed>>  $rows
      * @param  Collection<string, DayExercise>  $dayExercisesBySlug
      * @return Collection<int, LogSetData>
      */
-    private function parseRows(Collection $rows, Collection $dayExercisesBySlug): Collection
+    private function toLogSetData(Collection $rows, Collection $dayExercisesBySlug): Collection
     {
-        $errors = [];
         $setNumbers = [];
         $logs = collect();
 
-        foreach ($rows as $index => $row) {
-            $rowNumber = $index + 2; // row 1 is the header; data starts at row 2
-
+        foreach ($rows as $row) {
             $weight = $row['weight_kg'] ?? null;
             $reps = $row['reps'] ?? null;
 
-            if ($this->blank($weight) || $this->blank($reps)) {
-                continue;
-            }
-
-            $rowErrors = $this->validateRow($row, $weight, $reps, $dayExercisesBySlug);
-
-            if ($rowErrors !== []) {
-                foreach ($rowErrors as $field => $message) {
-                    $errors["row_{$rowNumber}.{$field}"] = [$message];
-                }
-
+            if (blank($weight) || blank($reps)) {
                 continue;
             }
 
             /** @var DayExercise $dayExercise */
-            $dayExercise = $dayExercisesBySlug->get($this->slug((string) $row['exercise']));
+            $dayExercise = $dayExercisesBySlug->get(Str::slug(Str::ascii((string) $row['exercise'])));
 
             $setNumbers[$dayExercise->exercise_id] = ($setNumbers[$dayExercise->exercise_id] ?? 0) + 1;
 
@@ -144,66 +159,11 @@ final class CycleDayImportService
                 weight_kg: (float) $weight,
                 reps: (int) $reps,
                 day_exercise_id: $dayExercise->uuid,
-                rpe: $this->blank($rpe) ? null : (float) $rpe,
-                note: $this->blank($note) ? null : (string) $note,
+                rpe: blank($rpe) ? null : (float) $rpe,
+                note: blank($note) ? null : (string) $note,
             ));
         }
 
-        if ($errors !== []) {
-            throw ValidationException::withMessages($errors);
-        }
-
         return $logs->values();
-    }
-
-    /**
-     * @param  array<string, mixed>  $row
-     * @param  Collection<string, DayExercise>  $dayExercisesBySlug
-     * @return array<string, string>
-     */
-    private function validateRow(array $row, mixed $weight, mixed $reps, Collection $dayExercisesBySlug): array
-    {
-        $errors = [];
-
-        if (! $dayExercisesBySlug->has($this->slug((string) ($row['exercise'] ?? '')))) {
-            $errors['exercise'] = 'Unknown exercise for this day.';
-        }
-
-        if (! is_numeric($weight) || (float) $weight <= 0) {
-            $errors['weight_kg'] = 'Must be a number greater than 0.';
-        }
-
-        if (! $this->isPositiveInteger($reps)) {
-            $errors['reps'] = 'Must be a whole number greater than 0.';
-        }
-
-        $rpe = $row['rpe'] ?? null;
-
-        if (! $this->blank($rpe) && (! is_numeric($rpe) || (float) $rpe < 0 || (float) $rpe > 10)) {
-            $errors['rpe'] = 'Must be a number between 0 and 10.';
-        }
-
-        return $errors;
-    }
-
-    private function slug(string $value): string
-    {
-        return Str::slug(Str::ascii(trim($value)));
-    }
-
-    private function isPositiveInteger(mixed $value): bool
-    {
-        if (! is_numeric($value)) {
-            return false;
-        }
-
-        $float = (float) $value;
-
-        return $float > 0 && $float === floor($float);
-    }
-
-    private function blank(mixed $value): bool
-    {
-        return $value === null || (is_string($value) && trim($value) === '');
     }
 }
