@@ -187,7 +187,11 @@ wired). All in `tests/Feature/Session/RetryFailedSessionAnalysesCommandTest.php`
 — per this repo's convention, a Console Command is its own entry point (like
 a Controller, but invoked via CLI instead of HTTP), so it gets a Feature test
 running it end to end with `$this->artisan(...)`, exactly as an HTTP entry
-point gets a Feature test running it end to end with a request.
+point gets a Feature test running it end to end with a request. TC-1 through
+TC-4 exercise that entry point directly; TC-5 and TC-6 are unit-level,
+testing the Action and the schedule registration in isolation (same
+precedent as `docs/plans/session-analysis-spec.md` §9, "don't run the job
+through HTTP") — not a substitute for TC-1–TC-4, a supplement to them.
 
 **TC-1:** Dispatches `SessionAnalysisJob` for every session in `analysis_state = failed`
 - **Given:** `Bus::fake([SessionAnalysisJob::class])`; three `TrainingSession` rows with `analysis_state = AnalysisState::Failed` (different users/routines — the command is system-wide, not scoped, per AC)
@@ -215,8 +219,8 @@ point gets a Feature test running it end to end with a request.
 - **Expect:** returns a `Collection` of exactly the two `failed` sessions (by `id`), in any order
 
 **TC-6:** The command is registered on the schedule with the agreed cadence and overlap protection (AC)
-- **Given:** the application is booted (`routes/console.php` loaded)
-- **When:** resolving `Illuminate\Console\Scheduling\Schedule` from the container and finding the event whose `command` string contains `sessions:retry-failed-analysis`
+- **Given:** a fresh test run (no prior Artisan call in this test)
+- **When:** `$this->artisan('schedule:list')` (bootstraps the console kernel, which `require`s `routes/console.php` and populates the `Schedule` singleton — merely resolving `Schedule::class` beforehand would find it empty, since building the singleton does not itself execute `routes/console.php`); then resolving `Illuminate\Console\Scheduling\Schedule` from the container and finding the event whose `command` string contains `sessions:retry-failed-analysis`
 - **Expect:** the event's `expression === '0 8,14,20 * * *'` and `withoutOverlapping === true`
 
 ---
@@ -231,7 +235,7 @@ point gets a Feature test running it end to end with a request.
 | Action return value | `Collection<int, TrainingSession>` — the sessions it dispatched for, not a bare count. | Lets the Command log a count without a second query, and lets TC-5 assert on *which* sessions were acted on, not just how many — a stronger, still-simple test. |
 | Command signature | `sessions:retry-failed-analysis` | Confirmed with the user; it is also the exact name already written into the Notion ticket's "Qué falta" field. |
 | Schedule cadence | `->cron('0 8,14,20 * * *')` — 08:00, 14:00, 20:00 — `->timezone(config('app.timezone'))`, `->withoutOverlapping()` (default 1440-minute lock, unchanged). | Confirmed with the user; matches the example cron already written into the ticket. Three evenly-spread runs a day means a `failed` session waits at most ~6h for its next automatic retry. `withoutOverlapping()`'s default lock (24h) is far longer than any run of this command could plausibly take, so no override is needed. |
-| Log shape | One `Log::info()` call per run, with `found` and `requeued` as separate structured-context keys even though they are always equal in this design (every found session is unconditionally re-dispatched — dispatch under the `database` queue driver only inserts a `jobs` row, it does not itself fail in a way this command would catch). | The ticket's AC literally asks for "cuántas encontró / reencoló"; logging both keys satisfies that wording exactly and gives a future reader an anchor if the two ever diverge (e.g. a future partial-failure path). Matches the existing `Log::info(...)` precedent in `ExerciseCatalogService` — no new logging channel or helper. |
+| Log shape | One `Log::info()` call per run, with `found` and `requeued` as separate structured-context keys even though they are always equal in this design (every found session is unconditionally re-dispatched — dispatch under the `database` queue driver only inserts a `jobs` row, it does not itself fail in a way this command would catch). | The ticket's AC literally asks for "cuántas encontró / reencoló"; logging both keys satisfies that wording exactly and gives a future reader an anchor if the two ever diverge (e.g. a future partial-failure path). Uses the same bare `Log::info(...)` call (no new logging channel or helper) as the one existing precedent in `ExerciseCatalogService` — that precedent is a single interpolated string with no context array, so this ticket is the first to add a structured-context payload; not claimed as an exact shape match, just the same minimal-tooling approach. |
 | `withoutOverlapping()` over `onOneServer()` | Only `withoutOverlapping()` is used. `onOneServer()` (which needs a cache-based mutex shared across machines) is not added. | This app runs a single `scheduler` container (`docker-compose.yml`); there is no multi-server deployment in scope to protect against. `withoutOverlapping()` alone is enough to satisfy the AC ("que dos corridas no procesen la misma sesión a la vez"). |
 | Test file location | `tests/Feature/Session/RetryFailedSessionAnalysesCommandTest.php`, not `tests/Unit/`. | Confirmed with the user. A Console Command is its own entry point, run end-to-end via `$this->artisan(...)` against a real (SQLite) database — the CLI analogue of a Controller/HTTP Feature test, consistent with `CLAUDE.md`'s "one file per endpoint" framing for `tests/Feature`. |
 | No new `ArchTest.php` rule | Not added. | The existing `arch('actions are final and expose handle()')` rule already covers `SessionAnalysisRetryAction` (it lives under `App\Actions`). Nothing in `CLAUDE.md` mandates a Console-Command-specific arch rule, and adding one for a single command would be speculative generality (`CLAUDE.md` rule 5). |
@@ -253,7 +257,7 @@ single entry) — no throwaway-container tooling or database cloning is needed;
 | 4 | Write `tests/Feature/Session/RetryFailedSessionAnalysesCommandTest.php` (TC-1…TC-6 per §8) | `vendor/bin/pest tests/Feature/Session/RetryFailedSessionAnalysesCommandTest.php` green. |
 | 5 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse` | Pint reports no diffs; PHPStan level 6 clean. |
 | 6 | `composer check` (Pint `--test` + PHPStan level 6 + full Pest suite) | All green; no regression in any other domain's suite. |
-| 7 | Manual check: `docker compose exec app php artisan tinker` — create a `TrainingSession` factory row with `analysis_state = failed`, run `php artisan sessions:retry-failed-analysis`, confirm the job was queued (`QUEUE_CONNECTION=sync` locally runs it inline) and the log line appears in `storage/logs/laravel.log` | The session's `analysis_state` moves off `failed` (to `processing`/`done`, or back to `failed` if the AI call itself is unreachable locally — either way, proof the job ran); the log line shows the expected count. |
+| 7 | Manual check: `docker compose exec app php artisan tinker` — create a `TrainingSession` factory row with `analysis_state = failed`, run `php artisan sessions:retry-failed-analysis`, confirm the job was queued (`QUEUE_CONNECTION=sync` locally runs it inline) and the log line appears in `storage/logs/laravel.log` | The log line in `storage/logs/laravel.log` shows `found = 1, requeued = 1` — the single, unambiguous signal that the Action ran and dispatched the job (the session's resulting `analysis_state` depends on local AI-provider reachability, so it is not part of this check). |
 
 *Process note: branch name, commit messages and PR text follow `CLAUDE.md` /
 `AGENTS.md` — English only, and no AI attribution anywhere.*
