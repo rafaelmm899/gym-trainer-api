@@ -79,9 +79,9 @@ final class CycleDayImportService
             // domain-owned exception — a Service raises a business/content
             // problem, never the framework's own HTTP-layer
             // Illuminate\Validation\ValidationException; ApiExceptionRenderer
-            // renders it with the same VALIDATION_EXCEPTION envelope (see
-            // CarriesValidationErrors). Anything else (a corrupt or
-            // unparseable upload) folds into the same envelope under `file`.
+            // renders it with the same VALIDATION_EXCEPTION envelope. Anything
+            // else (a corrupt or unparseable upload) folds into the same
+            // envelope under `file`.
             throw new CycleDayImportValidationException(
                 $e instanceof ExcelValidationException
                     ? $this->rowErrors($e->failures())

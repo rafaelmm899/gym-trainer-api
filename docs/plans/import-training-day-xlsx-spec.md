@@ -24,6 +24,27 @@
 > (download the day, fill it, re-upload the same file) works. Decided with the
 > user: **the accepted format is `.xlsx` only.** The story's literal "CSV" /
 > "`#` line" / "CSV dialect" language is stale and does not apply.
+>
+> **Implementation corrections (code review, this session):** two design
+> points below were changed after the first implementation pass, on review
+> feedback:
+> 1. **Row validation runs through `maatwebsite/excel`'s own `WithValidation`
+>    pipeline**, not hand-rolled per-row checks in the Service. `CycleDayImport`
+>    declares the field rules (gated by a `withValidator()` `sometimes()`
+>    clause) and the file is read via **`Excel::import()`** — not
+>    `Excel::toCollection()`, which never invokes `WithValidation` at all and
+>    was the first pass's actual bug (rows never validated).
+> 2. **`CycleDayImportService` never throws `Illuminate\Validation\ValidationException`** —
+>    an HTTP-layer class has no business being thrown from a Service. It throws
+>    a domain-owned **`App\Exceptions\Cycle\CycleDayImportValidationException`**
+>    (a `DomainException`) instead; `ApiExceptionRenderer` renders it with the
+>    same `VALIDATION_EXCEPTION` code and `data.errors` shape a Form Request
+>    failure gets. The wire contract in §2.1 / §8 / §9 below is unchanged by
+>    this — only which class carries it.
+>
+> §2.1, §6, §9 and the §10 work plan below are updated to match; §8's test
+> cases needed no changes (they assert the response shape, not the exception
+> class).
 
 ## 1. Context
 
@@ -118,7 +139,7 @@ Notes:
 - **"Filled" row.** A row counts as filled only if **both** `weight_kg` and `reps` cells are non-blank. Anything else — a fully blank row, a row with only one of the two — is silently skipped, never a validation error. An exercise with zero filled rows is simply not logged.
 - **Row validation** (filled rows only): `weight_kg` numeric `> 0`; `reps` integer `> 0`; `rpe` optional, numeric `0`–`10`; `note` optional, any string (blank → `null`); `exercise` must match as above. **All** filled rows are validated before anything is persisted — a request with three bad rows reports all three in one `422`, not one-at-a-time.
 - **`set_number`.** Recomputed by `CycleDayImportService`, **not** read from the sheet's own `set_number` column (that column is per-*prescription*, `1..sets`, and is not what `SetLogCreateAction` expects). The service assigns a running counter per exercise from the order filled rows appear in the sheet: the first filled row for an exercise is `1`, the second `2`, and so on — matching `SetLogCreateAction`'s own "next contiguous number" invariant by construction, so `NonContiguousSetNumberException` can never fire from this path.
-- **Row-level error shape.** Per-row problems are reported through the *existing* `VALIDATION_EXCEPTION` envelope (`data.errors`), not a new error shape: `CycleDayImportService` builds a message bag keyed `row_<n>.<field>` (e.g. `row_3.weight_kg`, `row_5.exercise`) — `<n>` is the row's position in the spreadsheet as the user would see it in Excel (data rows start at `2`, since row `1` is the header) — and throws `ValidationException::withMessages($errors)`. This keeps `data.errors` to the one shape `CLAUDE.md` documents (`{field: [msg]}`), with the row folded into the field key, instead of inventing a second "errors" format. A file that isn't a parseable `.xlsx` (caught around the `Excel::toCollection()` call — `Maatwebsite\Excel\Exceptions\UnreadableFileException` or similar) throws the same way under the key `file`.
+- **Row-level error shape.** Field validation (`weight_kg` / `reps` / `rpe` / the exercise match) runs through `maatwebsite/excel`'s own `WithValidation` pipeline, declared on `CycleDayImport` — not hand-rolled checks in the Service. `Excel::import($import, $file)` (not `Excel::toCollection()`, which never invokes `WithValidation`) throws `Maatwebsite\Excel\Validators\ValidationException` carrying one `Failure` per bad row/field, each already keyed to the real spreadsheet row number. `CycleDayImportService` catches it and re-keys those `Failure`s into a `row_<n>.<field>` message map (e.g. `row_3.weight_kg`, `row_5.exercise`) — `<n>` is the row's position as the user would see it in Excel (data rows start at `2`, since row `1` is the header) — then throws `App\Exceptions\Cycle\CycleDayImportValidationException` (a `DomainException`, not `Illuminate\Validation\ValidationException` — a Service must not throw an HTTP-layer class) carrying that map. `ApiExceptionRenderer` renders it with the *existing* `VALIDATION_EXCEPTION` code and the same `data.errors` shape a Form Request failure gets, not a new error shape. A file that isn't a parseable `.xlsx` (caught around the `Excel::import()` call) throws the same way under the key `file`.
 - **Nothing persisted on `422`/`409`.** `CycleDayImportService::handle()` does all reading and validation *before* `TrainingSessionImportAction` opens its `DB::transaction` — no session, no set, nothing is ever written unless the whole file validates.
 - **Empty-file edge case.** A workbook with **zero** filled rows anywhere is not a special case in this endpoint: the session opens with no sets, and `SessionCloseAction`'s own existing guard (`SessionCompletionService::guard()`) throws the existing `SessionHasNoSetsException` (`422`) when it tries to close a session with no sets logged — which rolls back the whole transaction. No new guard needed for this case.
 - **Inherited `409 SESSION_IN_PROGRESS`.** `TrainingSessionCreateAction` (reused unchanged) still runs its own `TrainingSessionOpeningService::guard()`, which throws `SessionInProgressException` if the user already has an unrelated `in_progress` session open. This is existing, inherited behavior — the story does not change it, and it fires *after* the three guards above and *after* the file has already validated, so it is the last thing that can reject the request.
@@ -195,8 +216,8 @@ not Policy concerns.
 
 No environment variables and no `config/*` changes. No new dependency —
 `maatwebsite/excel` `^4.0` is already installed for the export story; this is
-its first use on the *read* side (`Excel::toCollection()`), which ships in the
-same package.
+its first use on the *read* side (`Excel::import()`, driving the
+`WithValidation` pipeline), which ships in the same package.
 
 ---
 
@@ -206,8 +227,8 @@ same package.
 |---|---|---|
 | Logging a filled offline day | Not possible in one call — the user (or a script) must call `POST .../sessions`, then `POST /sessions/{session}/sets` once per set, then `POST /sessions/{session}/complete`, tracking `set_number` itself. | `POST .../cycle-days/{day}/import` with the filled `.xlsx` does all three atomically in one request; `set_number` is computed for the caller. |
 | Re-training an already-completed day | No guard exists anywhere that prevents opening a new session for a `cycle_day` that already has a `completed` session — a second `POST .../sessions` with the same `day` would simply succeed. | **Only for this endpoint:** a new guard (`App\Exceptions\Session\CycleDayAlreadyCompletedException`, `409 CYCLE_DAY_ALREADY_COMPLETED`) rejects an import for a `cycle_day` that already has a `completed` session in the active cycle. `POST .../sessions` is unchanged — this is not a new invariant on session-opening in general. |
-| `maatwebsite/excel` usage | Write-only (`Excel::download()` for the export). | Also read (`Excel::toCollection()`), via a new, minimal `App\Imports\Cycle\CycleDayImport` adapter. |
-| `data.errors` shape | Populated only by Form Request validation failures (`{field: [msg]}`). | Also populated by `CycleDayImportService` for row-content problems, using the same shape with row-scoped keys (`row_<n>.<field>`) — no new error envelope format. |
+| `maatwebsite/excel` usage | Write-only (`Excel::download()` for the export). | Also read (`Excel::import()`, its `WithValidation` pipeline declared on `App\Imports\Cycle\CycleDayImport`). |
+| `data.errors` shape | Populated only by Form Request validation failures (`{field: [msg]}`), via `Illuminate\Validation\ValidationException`. | Also populated by `App\Exceptions\Cycle\CycleDayImportValidationException` (a `DomainException`, never the framework's own `ValidationException` — Services don't throw HTTP-layer classes) for row-content problems, using the same shape with row-scoped keys (`row_<n>.<field>`) — no new error envelope format. |
 
 ---
 
@@ -251,27 +272,30 @@ in the returned collection.
 
 **TC-8:** an exercise cell that doesn't match any of `{day}`'s
 `day_exercises` (including a name that exists in the global catalog under a
-different day) → `ValidationException` with an error under `row_<n>.exercise`.
+different day) → `CycleDayImportValidationException` with an error under
+`row_<n>.exercise`.
 
-**TC-9:** `weight_kg` `0` or negative, or non-numeric → `ValidationException`,
-`row_<n>.weight_kg`.
+**TC-9:** `weight_kg` `0` or negative, or non-numeric →
+`CycleDayImportValidationException`, `row_<n>.weight_kg`.
 
-**TC-10:** `reps` `0`, negative, or non-integer → `ValidationException`,
-`row_<n>.reps`.
+**TC-10:** `reps` `0`, negative, or non-integer →
+`CycleDayImportValidationException`, `row_<n>.reps`.
 
-**TC-11:** `rpe` `10.5` (out of `0`–`10`) → `ValidationException`,
-`row_<n>.rpe`. `rpe` blank is valid (optional).
+**TC-11:** `rpe` `10.5` (out of `0`–`10`) →
+`CycleDayImportValidationException`, `row_<n>.rpe`. `rpe` blank is valid
+(optional).
 
-**TC-12:** two separately-bad rows in one file → one `ValidationException`
-whose `errors()` contains both `row_<n1>.*` and `row_<n2>.*` keys — proves
-rows are validated in bulk, not fail-fast.
+**TC-12:** two separately-bad rows in one file → one
+`CycleDayImportValidationException` whose `errors()` contains both
+`row_<n1>.*` and `row_<n2>.*` keys — proves rows are validated in bulk, not
+fail-fast.
 
 **TC-13:** the exercise match is accent/case-insensitive (`"Sentadilla"` cell
 matches a `day_exercise` named `"sentadilla"` or `"SENTADILLA"`) via
 `Str::slug(Str::ascii(...))`.
 
-**TC-14:** a corrupt / non-spreadsheet file content → `ValidationException`,
-key `file`.
+**TC-14:** a corrupt / non-spreadsheet file content →
+`CycleDayImportValidationException`, key `file`.
 
 **TC-15:** the row number in an error key is the spreadsheet row (header is
 row `1`; the first data row is row `2`) — a bad second data row reports
@@ -372,9 +396,10 @@ unchanged (guard/validation exceptions are not caught/wrapped) and no
 | Authorization | Reuse `TrainingSessionPolicy::create` (`->can('create', [TrainingSession::class, 'routine'])`). No new `importDay` ability. | The story explicitly left this open ("a definir en spec"). Importing a day *is* opening a session for that routine — the existing ability already expresses exactly that ownership check; a second ability would be indirection with no second use (`CLAUDE.md` golden rule 6). |
 | `{day}` guard exceptions | Reuse `App\Exceptions\Cycle\RoutineHasNoActiveCycleException` / `CycleDayNotInActiveCycleException` (both `422`) — the same classes the export uses — rather than the Session-domain `409` siblings `TrainingSessionOpeningService` throws. | `{day}` arrives as a **route parameter** in this endpoint, exactly as in the export; the codebase's own convention (documented on both exception classes) is route-param `{day}` → `422` (Cycle domain), body-field `day` → `409` (Session domain). Matches the story's stated `422` for "rutina no activa" / "`{day}` inválido". |
 | New "day already completed" guard | A new `App\Exceptions\Session\CycleDayAlreadyCompletedException` (`409`, default `DomainException` status), thrown from `CycleDayImportService`, checked before the file is parsed. Scoped to this endpoint only — `TrainingSessionOpeningService` (shared with `POST .../sessions`) is not touched. | This is a genuinely new invariant the story adds ("Rechaza con 409 si el `cycle_day` ya tiene una sesión `completed`") that no existing guard covers, and the story frames it as specific to the import flow, not a change to how sessions are opened in general. |
-| Row-level error shape | Reuse the existing `VALIDATION_EXCEPTION` / `data.errors` envelope, with message-bag keys `row_<n>.<field>` (`<n>` = the spreadsheet row number the user would see, header = row 1), thrown via `ValidationException::withMessages(...)` directly from the Service. | `CLAUDE.md` reserves `data.errors` for the `VALIDATION_EXCEPTION` code specifically because it is the one place a `{field: [msg]}` map belongs; a row is not a form field in the traditional sense, but folding it into a dotted key (`row_3.weight_kg`) stays inside that one contract instead of inventing a second "errors" shape on a `DomainException`. |
+| Row validation mechanism | Delegated to `maatwebsite/excel`'s own `WithValidation` concern, declared on `CycleDayImport` (field rules gated by a `withValidator()` `sometimes()` clause), read via `Excel::import()` — not hand-rolled per-field checks in the Service, and not `Excel::toCollection()`, which never runs `WithValidation` at all. | Code review feedback: the library already validates rows; re-implementing that in the Service duplicated it and (worse) `Excel::toCollection()` silently never validated anything — a real bug the switch to `Excel::import()` fixed. |
+| Row-level error shape | Reuse the existing `VALIDATION_EXCEPTION` / `data.errors` envelope, with message-bag keys `row_<n>.<field>` (`<n>` = the spreadsheet row number the user would see, header = row 1). `CycleDayImportService` re-keys the library's own `Maatwebsite\Excel\Validators\Failure` objects (which already carry the real row number) into that map and throws `App\Exceptions\Cycle\CycleDayImportValidationException` — a `DomainException`, never `Illuminate\Validation\ValidationException` directly. | `CLAUDE.md` reserves `data.errors` for the `VALIDATION_EXCEPTION` code specifically because it is the one place a `{field: [msg]}` map belongs; a row is not a form field in the traditional sense, but folding it into a dotted key (`row_3.weight_kg`) stays inside that one contract instead of inventing a second "errors" shape on a `DomainException`. Code review feedback: a Service throwing the framework's own HTTP-layer `ValidationException` unions the HTTP layer into the domain layer — the Service raises a domain-owned exception instead, and `ApiExceptionRenderer` (already "the one place raw error JSON is built") is the one place that knows how to render it into that same wire shape. |
 | `set_number` source | Recomputed by `CycleDayImportService` as a running per-exercise counter over the filled rows in sheet order — the sheet's own `set_number` column (per-*prescription*, `1..sets`) is read-only context and ignored on import. | `SetLogCreateAction` requires the next contiguous number *per exercise, per session* — a fresh session's numbering has nothing to do with how many sets were prescribed. Computing it this way means `NonContiguousSetNumberException` can never fire from this path. |
-| Bulk row validation | All filled rows are validated before anything is persisted; every invalid row is reported in one `ValidationException`, not just the first. | Matches "422 ... con detalle por fila" (plural) in the acceptance criteria, and standard bulk-import UX — one round trip to see every problem, not one row at a time. |
+| Bulk row validation | All filled rows are validated before anything is persisted; every invalid row is reported in one `CycleDayImportValidationException`, not just the first. | Matches "422 ... con detalle por fila" (plural) in the acceptance criteria, and standard bulk-import UX — one round trip to see every problem, not one row at a time. `Excel::import()`'s validator batches the whole sheet through one Laravel `Validator` call, so this falls out of the library's own behavior rather than a manual loop. |
 | Zero-filled-row workbook | No new guard. `SessionCloseAction`'s existing `SessionHasNoSetsException` (`422`) fires naturally when the action tries to close a session with nothing logged, rolling back the whole transaction. | Reuses an existing, already-tested invariant instead of duplicating it — an empty import is exactly "a session with no sets," which the system already refuses to complete. |
 | Exercise match scope | Matched against `{day}`'s own `day_exercises` (via the `Exercise.slug` column), never the global catalog, and never creates a new `Exercise`. | The story is explicit: "el `exercise` debe corresponder a un `day_exercise` de ese `cycle_day`." An exercise that exists elsewhere in the catalog but isn't prescribed on this day is still an error — the import logs against the plan, it doesn't extend it. |
 | Duplicate exercise prescribed twice on one day | The first `day_exercise` (by `order`) is used to resolve `exercise_id`; not treated as an error. | `SetLogCreateAction`'s own invariants key off `exercise_id`, not `day_exercise_id`, so which of the two identical-exercise prescriptions is referenced is immaterial. Rare edge case, not worth a new error path. |
@@ -390,15 +415,16 @@ unchanged (guard/validation exceptions are not caught/wrapped) and no
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Create `app/Exceptions/Session/CycleDayAlreadyCompletedException.php` — `final`, extends `DomainException`, `$errorCode = 'CYCLE_DAY_ALREADY_COMPLETED'` (default `409` status, no override), default message. | `->statusCode() === 409`, `->errorCode() === 'CYCLE_DAY_ALREADY_COMPLETED'` (locked by TC-3). |
-| 2 | Create `app/Imports/Cycle/CycleDayImport.php` — `final class CycleDayImport implements Import, WithHeadingRow {}`. No methods beyond what the interfaces require. | `phpstan` clean; `Excel::toCollection(new CycleDayImport, $file)` resolves headings by name. |
-| 3 | Create `app/Services/Cycle/CycleDayImportService.php` — `final`. `handle(Routine $routine, CycleDay $day, UploadedFile $file): Collection<int, LogSetData>`: guards (§2.1 order 1–3) using `$routine->loadMissing('activeCycle')` / `$day->loadMissing('dayExercises.exercise')`; reads the file via `Excel::toCollection(new CycleDayImport, $file)->first()` inside a try/catch that rethrows as `ValidationException::withMessages(['file' => [...]])`; builds a slug-keyed map of the day's `day_exercises`; iterates rows (skip unfilled, validate filled — collecting `row_<n>.<field>` errors into one array), throws `ValidationException::withMessages($errors)` if any; otherwise returns the built `Collection<LogSetData>` with per-exercise contiguous `set_number`. | `phpstan` clean; behavior locked by TC-1–TC-15. |
-| 4 | Write `tests/Unit/Cycle/CycleDayImportServiceTest.php` (TC-1–TC-15), each case its own `it()`; a small helper builds a real, readable `.xlsx` `UploadedFile` from a row array. | File green in isolation. |
-| 5 | Create `app/Actions/Session/TrainingSessionImportAction.php` — `final`, constructor-promotes `CycleDayImportService`, `TrainingSessionCreateAction`, `SetLogCreateAction`, `SessionCloseAction`. `handle(User $user, Routine $routine, CycleDay $day, UploadedFile $file): TrainingSession`: `$rows = $this->import->handle($routine, $day, $file);` outside any transaction, then `DB::transaction(function () use (...) { open the session via TrainingSessionCreateAction with CreateTrainingSessionData::from(['day' => $day->uuid]); foreach ($rows as $row) log it via SetLogCreateAction; close via SessionCloseAction with CompleteSessionData::from([]); return the closed session; })`. | `phpstan` clean; behavior locked by TC-16–TC-17. |
-| 6 | Write `tests/Unit/Session/TrainingSessionImportActionTest.php` (TC-16–TC-17). | File green. |
-| 7 | Create `app/Http/Requests/Cycle/ImportCycleDayRequest.php` — `authorize()`: `$user !== null && $user->can('create', [TrainingSession::class, $this->route('routine')])`; `rules()`: `['file' => ['required', 'file', 'mimes:xlsx']]`. | Matches `StoreTrainingSessionRequest`'s authorization pattern; `phpstan` clean. |
-| 8 | Create `app/Http/Controllers/Cycle/ImportCycleDayController.php` — invokable, `__invoke(ImportCycleDayRequest $request, Routine $routine, CycleDay $day, TrainingSessionImportAction $action): JsonResponse` → resolves `$user = $request->user()`, calls `$action->handle($user, $routine, $day, $request->file('file'))`, returns `TrainingSessionResource::make($session)->response()->setStatusCode(Response::HTTP_CREATED)` (mirrors `StoreTrainingSessionController` exactly). | `arch('cycle controllers are invokable')` passes. |
-| 9 | Register the route in `routes/api.php`, immediately after `routines.cycle-days.export`: `Route::post('routines/{routine}/cycle-days/{day}/import', ImportCycleDayController::class)->whereUuid('routine')->whereUuid('day')->name('routines.cycle-days.import');` with a short comment; import the controller alphabetically. | `php artisan route:list` shows `routines.cycle-days.import`. |
-| 10 | Write `tests/Feature/Cycle/ImportCycleDayTest.php` — TC-18 through TC-33, each its own `it()`, reusing the `.xlsx`-building helper from step 4 (moved to a shared test support location if warranted). `Queue::fake()` per test asserting `SessionAnalysisJob`. | `vendor/bin/pest tests/Feature/Cycle/ImportCycleDayTest.php` green. |
-| 11 | Run the project checks: `vendor/bin/pint app tests routes/api.php --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Import` plus `--filter=Cycle` plus `--filter=Session`, then the full `vendor/bin/pest`. | Pint clean, PHPStan level 6 clean, all tests green. No migration → no DB clone. |
+| 2 | Create `app/Exceptions/Cycle/CycleDayImportValidationException.php` — `final`, extends `DomainException`, `$errorCode = ErrorCode::Validation->value`, `$statusCode = 422`, constructor takes `array<string, list<string>> $errors` and exposes `errors(): array`. Add a matching arm in `App\Exceptions\ApiExceptionRenderer` (`$e instanceof CycleDayImportValidationException => ...`, rendering `$e->errorCode()` / `$e->statusCode()` / `['errors' => $e->errors()]`), placed before the generic `DomainException` arm. | `phpstan` clean; `->errorCode() === 'VALIDATION_EXCEPTION'`; a thrown instance renders `data.errors`. |
+| 3 | Create `app/Imports/Cycle/CycleDayImport.php` — `final class CycleDayImport implements Import, ToCollection, WithHeadingRow, WithValidation`. Constructor takes the day's `Collection<string, DayExercise> $dayExercisesBySlug`; `collection()` / `rows()` store and expose the read rows; `rules()` returns `[]` (every field rule is conditional, added only in `withValidator()`); `customValidationMessages()` maps `weight_kg.*` / `reps.*` / `rpe.*` / `exercise.required` to the plain-English messages; `withValidator(Validator $validator)` registers four `$validator->sometimes('*.<field>', [...], $isFilled)` calls (`$isFilled` = both `weight_kg` and `reps` present), the `exercise` one paired with a closure rule matching the cell's slug against `$dayExercisesBySlug`. | `phpstan` clean; `Excel::import(new CycleDayImport($map), $file)` throws `Maatwebsite\Excel\Validators\ValidationException` for a bad filled row, is silent for an unfilled one. |
+| 4 | Create `app/Services/Cycle/CycleDayImportService.php` — `final`. `handle(Routine $routine, CycleDay $day, UploadedFile $file): Collection<int, LogSetData>`: guards (§2.1 order 1–3) using `$routine->loadMissing('activeCycle')` / `$day->loadMissing('dayExercises.exercise')`; builds the slug-keyed `day_exercises` map; reads the file via `Excel::import($import, $file)` (not `Excel::toCollection()`) inside a try/catch — a `Maatwebsite\Excel\Validators\ValidationException` is re-keyed (via its `failures()`) into a `row_<n>.<field>` map, anything else becomes `['file' => [...]]`, both thrown as `CycleDayImportValidationException`; on success, reads `$import->rows()` and turns every filled row into a `LogSetData` with per-exercise contiguous `set_number`. | `phpstan` clean; behavior locked by TC-1–TC-15. |
+| 5 | Write `tests/Unit/Cycle/CycleDayImportServiceTest.php` (TC-1–TC-15), each case its own `it()`; a shared `tests/Helpers.php` helper builds a real, readable `.xlsx` `UploadedFile` from a row array (`strictNullComparison: true` on `fromArray()` — its default loose comparison silently drops a literal `0`). | File green in isolation. |
+| 6 | Create `app/Actions/Session/TrainingSessionImportAction.php` — `final`, constructor-promotes `CycleDayImportService`, `TrainingSessionCreateAction`, `SetLogCreateAction`, `SessionCloseAction`. `handle(User $user, Routine $routine, CycleDay $day, UploadedFile $file): TrainingSession`: `$rows = $this->import->handle($routine, $day, $file);` outside any transaction, then `DB::transaction(function () use (...) { open the session via TrainingSessionCreateAction with CreateTrainingSessionData::from(['day' => $day->uuid]); foreach ($rows as $row) log it via SetLogCreateAction; close via SessionCloseAction with CompleteSessionData::from([]); return the closed session; })`. | `phpstan` clean; behavior locked by TC-16–TC-17. |
+| 7 | Write `tests/Unit/Session/TrainingSessionImportActionTest.php` (TC-16–TC-17). | File green. |
+| 8 | Create `app/Http/Requests/Cycle/ImportCycleDayRequest.php` — `authorize()`: `$user !== null && $user->can('create', [TrainingSession::class, $this->route('routine')])`; `rules()`: `['file' => ['required', 'file', 'mimes:xlsx']]`. | Matches `StoreTrainingSessionRequest`'s authorization pattern; `phpstan` clean. |
+| 9 | Create `app/Http/Controllers/Cycle/ImportCycleDayController.php` — invokable, `__invoke(ImportCycleDayRequest $request, Routine $routine, CycleDay $day, TrainingSessionImportAction $action): JsonResponse` → resolves `$user = $request->user()`, `$file = $request->validated('file')` (not `$request->file()` — a write takes `validated()`), calls `$action->handle($user, $routine, $day, $file)`, returns `TrainingSessionResource::make($session)->response()->setStatusCode(Response::HTTP_CREATED)` (mirrors `StoreTrainingSessionController` exactly). | `arch('cycle controllers are invokable')` passes. |
+| 10 | Register the route in `routes/api.php`, immediately after `routines.cycle-days.export`: `Route::post('routines/{routine}/cycle-days/{day}/import', ImportCycleDayController::class)->whereUuid('routine')->whereUuid('day')->name('routines.cycle-days.import');` with a short comment; import the controller alphabetically. | `php artisan route:list` shows `routines.cycle-days.import`. |
+| 11 | Write `tests/Feature/Cycle/ImportCycleDayTest.php` — TC-18 through TC-33, each its own `it()`, reusing the `tests/Helpers.php` `.xlsx`-building helper. `Bus::fake([SessionAnalysisJob::class])` per test asserting the analysis job (matches `CompleteTrainingSessionTest`'s existing convention — not `Queue::fake()`). | `vendor/bin/pest tests/Feature/Cycle/ImportCycleDayTest.php` green. |
+| 12 | Run the project checks: `vendor/bin/pint app tests routes/api.php --format agent`, then `vendor/bin/phpstan analyse`, then `vendor/bin/pest --filter=Import` plus `--filter=Cycle` plus `--filter=Session`, then the full `vendor/bin/pest`. | Pint clean, PHPStan level 6 clean, all tests green. No migration → no DB clone. |
 
 ---

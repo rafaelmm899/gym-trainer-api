@@ -3,7 +3,6 @@
 namespace App\Exceptions\Cycle;
 
 use App\Enums\Shared\ErrorCode;
-use App\Exceptions\CarriesValidationErrors;
 use App\Exceptions\DomainException;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -12,10 +11,12 @@ use Symfony\Component\HttpFoundation\Response;
  * be read as a spreadsheet at all. Thrown from `CycleDayImportService`, which
  * cannot express this as a Form Request rule because matching a row's
  * `exercise` cell against the day's own `day_exercises` needs data only the
- * Service has loaded. HTTP 422, `data.errors` keyed `row_<n>.<field>` (or
- * `file` for an unreadable upload) via {@see CarriesValidationErrors}.
+ * Service has loaded. `ApiExceptionRenderer` gives it the same
+ * `VALIDATION_EXCEPTION` / `data.errors` shape as a Form Request failure —
+ * this genuinely is validation, just validation that cannot happen at the
+ * Form Request layer.
  */
-final class CycleDayImportValidationException extends DomainException implements CarriesValidationErrors
+final class CycleDayImportValidationException extends DomainException
 {
     protected string $errorCode = ErrorCode::Validation->value;
 

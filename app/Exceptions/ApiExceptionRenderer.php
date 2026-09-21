@@ -3,6 +3,7 @@
 namespace App\Exceptions;
 
 use App\Enums\Shared\ErrorCode;
+use App\Exceptions\Cycle\CycleDayImportValidationException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -61,10 +62,10 @@ final class ApiExceptionRenderer
                 Response::HTTP_TOO_MANY_REQUESTS,
                 headers: $e->getHeaders(),
             ),
-            $e instanceof CarriesValidationErrors => $this->envelope(
-                ErrorCode::Validation,
+            $e instanceof CycleDayImportValidationException => $this->envelope(
+                $e->errorCode(),
                 $e->getMessage(),
-                Response::HTTP_UNPROCESSABLE_ENTITY,
+                $e->statusCode(),
                 ['errors' => $e->errors()],
             ),
             $e instanceof DomainException => $this->envelope(
