@@ -5,6 +5,7 @@ namespace App\Services\Cycle;
 use App\Actions\Session\TrainingSessionImportAction;
 use App\Data\Session\LogSetData;
 use App\Enums\Session\SessionStatus;
+use App\Exceptions\Cycle\CycleDayImportValidationException;
 use App\Exceptions\Cycle\CycleDayNotInActiveCycleException;
 use App\Exceptions\Cycle\RoutineHasNoActiveCycleException;
 use App\Exceptions\Session\CycleDayAlreadyCompletedException;
@@ -16,7 +17,6 @@ use App\Models\TrainingSession;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Validators\Failure;
 use Maatwebsite\Excel\Validators\ValidationException as ExcelValidationException;
@@ -75,12 +75,14 @@ final class CycleDayImportService
             Excel::import($import, $file);
         } catch (Throwable $e) {
             // Re-keyed from the library's own per-row Failure objects (which
-            // already carry the real spreadsheet row number) into this API's
-            // one `{field: [msg]}` VALIDATION_EXCEPTION envelope — the
-            // library's own `errors()` returns a plain message list, not that
-            // shape. Anything else (a corrupt or unparseable upload) folds
-            // into the same envelope under `file`.
-            throw ValidationException::withMessages(
+            // already carry the real spreadsheet row number) into this
+            // domain-owned exception — a Service raises a business/content
+            // problem, never the framework's own HTTP-layer
+            // Illuminate\Validation\ValidationException; ApiExceptionRenderer
+            // renders it with the same VALIDATION_EXCEPTION envelope (see
+            // CarriesValidationErrors). Anything else (a corrupt or
+            // unparseable upload) folds into the same envelope under `file`.
+            throw new CycleDayImportValidationException(
                 $e instanceof ExcelValidationException
                     ? $this->rowErrors($e->failures())
                     : ['file' => ['The uploaded file could not be read as a valid .xlsx spreadsheet.']],

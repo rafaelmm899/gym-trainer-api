@@ -1,6 +1,7 @@
 <?php
 
 use App\Data\Session\LogSetData;
+use App\Exceptions\Cycle\CycleDayImportValidationException;
 use App\Exceptions\Cycle\CycleDayNotInActiveCycleException;
 use App\Exceptions\Cycle\RoutineHasNoActiveCycleException;
 use App\Exceptions\Session\CycleDayAlreadyCompletedException;
@@ -11,7 +12,6 @@ use App\Models\TrainingSession;
 use App\Models\User;
 use App\Services\Cycle\CycleDayImportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 // Unit coverage for docs/plans/import-training-day-xlsx-spec.md §8, Service TC-1..TC-15.
@@ -141,7 +141,7 @@ it('rejects a filled row whose exercise is not prescribed on this day', function
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('row_2.exercise');
     }
 });
@@ -159,7 +159,7 @@ it('rejects a non-positive or non-numeric weight_kg', function () {
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('row_2.weight_kg');
     }
 });
@@ -177,7 +177,7 @@ it('rejects a non-positive or non-integer reps', function () {
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('row_2.reps');
     }
 });
@@ -195,7 +195,7 @@ it('rejects an out-of-range rpe but accepts a blank one', function () {
     try {
         importService()->handle($routine, $day, $badFile);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('row_2.rpe');
     }
 
@@ -221,7 +221,7 @@ it('collects every bad row into one exception instead of failing fast', function
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKeys(['row_2.weight_kg', 'row_4.reps']);
     }
 });
@@ -250,7 +250,7 @@ it('rejects an unreadable file', function () {
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('file');
     }
 });
@@ -269,7 +269,7 @@ it('numbers a bad row by its spreadsheet row, header included', function () {
     try {
         importService()->handle($routine, $day, $file);
         expect(false)->toBeTrue('Expected a ValidationException.');
-    } catch (ValidationException $e) {
+    } catch (CycleDayImportValidationException $e) {
         expect($e->errors())->toHaveKey('row_3.weight_kg');
     }
 });

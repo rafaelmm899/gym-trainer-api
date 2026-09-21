@@ -61,6 +61,12 @@ final class ApiExceptionRenderer
                 Response::HTTP_TOO_MANY_REQUESTS,
                 headers: $e->getHeaders(),
             ),
+            $e instanceof CarriesValidationErrors => $this->envelope(
+                ErrorCode::Validation,
+                $e->getMessage(),
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+                ['errors' => $e->errors()],
+            ),
             $e instanceof DomainException => $this->envelope(
                 $e->errorCode(),
                 $e->getMessage(),

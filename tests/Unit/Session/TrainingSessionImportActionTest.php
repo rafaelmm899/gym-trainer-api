@@ -2,6 +2,7 @@
 
 use App\Actions\Session\TrainingSessionImportAction;
 use App\Enums\Session\SessionStatus;
+use App\Exceptions\Cycle\CycleDayImportValidationException;
 use App\Exceptions\Cycle\CycleDayNotInActiveCycleException;
 use App\Jobs\Session\SessionAnalysisJob;
 use App\Models\SetLog;
@@ -9,7 +10,6 @@ use App\Models\TrainingSession;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 // Unit coverage for docs/plans/import-training-day-xlsx-spec.md §8, Action TC-16..TC-17.
@@ -56,7 +56,7 @@ it('persists nothing when the import fails validation', function () {
     ]);
 
     expect(fn () => importAction()->handle($user, $routine, $day, $file))
-        ->toThrow(ValidationException::class);
+        ->toThrow(CycleDayImportValidationException::class);
 
     expect(TrainingSession::query()->count())->toBe(0)
         ->and(SetLog::query()->count())->toBe(0);
