@@ -39,6 +39,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read CycleDay|null $cycleDay
  * @property-read Collection<int, SetLog> $sets
  * @property-read int|null $sets_count
+ * @property-read Collection<int, ExerciseRecommendation> $recommendations
+ * @property-read int|null $recommendations_count
  *
  * @method static \Database\Factories\TrainingSessionFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession newModelQuery()
@@ -130,5 +132,16 @@ class TrainingSession extends Model
     public function sets(): HasMany
     {
         return $this->hasMany(SetLog::class, 'session_id');
+    }
+
+    /**
+     * The recommendations this session's analysis produced, whatever their
+     * current status.
+     *
+     * @return HasMany<ExerciseRecommendation, $this>
+     */
+    public function recommendations(): HasMany
+    {
+        return $this->hasMany(ExerciseRecommendation::class, 'source_session_id');
     }
 }
