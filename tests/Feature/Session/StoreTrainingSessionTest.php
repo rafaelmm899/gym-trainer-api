@@ -304,3 +304,23 @@ it('renders the cycle-day tree without a strict-mode lazy load', function () {
         ->assertJsonMissingPath('data.routine')
         ->assertJsonCount(3, 'data.cycle_day.exercises');
 });
+
+// TC-11
+it('reports the cycle number when opening a planned session', function () {
+    $routine = trainingRoutineWithCycle($this->user);
+    $day = $routine->cycle->cycleDays->first();
+
+    $this->actingAs($this->user)->postJson(sessionsUrl($routine), ['day' => $day->uuid])
+        ->assertCreated()
+        ->assertJsonPath('data.cycle_day.cycle.sequence_number', 1)
+        ->assertJsonPath('data.cycle_day.cycle.id', $routine->cycle->uuid);
+});
+
+// TC-12
+it('keeps a free session without a cycle day when opening it', function () {
+    $routine = trainingRoutineWithCycle($this->user);
+
+    $this->actingAs($this->user)->postJson(sessionsUrl($routine))
+        ->assertCreated()
+        ->assertJsonPath('data.cycle_day', null);
+});

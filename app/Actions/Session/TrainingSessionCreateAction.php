@@ -30,6 +30,6 @@ final class TrainingSessionCreateAction
             'started_at' => now(),
         ]));
 
-        return $session->load('cycleDay.dayExercises.exercise');
+        return $session->load(['cycleDay.cycle', 'cycleDay.dayExercises.exercise']);
     }
 }

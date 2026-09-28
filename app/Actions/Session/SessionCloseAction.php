@@ -27,7 +27,7 @@ final class SessionCloseAction
 
             SessionAnalysisJob::dispatch($session);
 
-            return $session->load('cycleDay');
+            return $session->load('cycleDay.cycle');
         });
     }
 }

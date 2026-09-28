@@ -1,6 +1,8 @@
 <?php
 
 use App\Jobs\Session\SessionAnalysisJob;
+use App\Models\Cycle;
+use App\Models\CycleDay;
 use App\Models\Exercise;
 use App\Models\Routine;
 use App\Models\SetLog;
@@ -200,4 +202,17 @@ it('exposes the full response shape with correct types', function () {
 
     expect($response->json('data.perceived_effort'))->toBeInt()
         ->and($response->json('data.completed_at'))->toMatch(iso8601Pattern());
+});
+
+// TC-13
+it('reports the cycle number when completing a planned session', function () {
+    Bus::fake([SessionAnalysisJob::class]);
+    $routine = Routine::factory()->for($this->user)->create();
+    $day = CycleDay::factory()->for(Cycle::factory()->for($routine)->create(['sequence_number' => 2]))->create();
+    $session = TrainingSession::factory()->for($this->user)->for($routine)->planned($day)->create();
+    SetLog::factory()->for($session, 'session')->for(Exercise::factory())->create();
+
+    $this->actingAs($this->user)->postJson(completeUrl($session), [])
+        ->assertOk()
+        ->assertJsonPath('data.cycle_day.cycle.sequence_number', 2);
 });

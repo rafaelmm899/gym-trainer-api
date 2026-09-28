@@ -261,6 +261,6 @@ helpers are reused).*
 | 1 | Add `cycle` (`whenLoaded`, `{id: uuid, sequence_number}`) to `CycleDayResource` | TC-14 passes; existing cycle structure tests stay green |
 | 2 | Load `cycleDay.cycle` in `ListTrainingSessionsController` and `ShowTrainingSessionController` (next to `dayExercises.exercise`) | TC-1 to TC-4, TC-9, TC-10 and TC-15 pass |
 | 3 | Load `cycleDay.cycle` in `TrainingSessionCreateAction` and `SessionCloseAction` | TC-11 to TC-13 pass; import feature and unit tests stay green |
-| 4 | Add the `cycle_day` rule (`['sometimes', 'uuid']`) to `ListTrainingSessionsRequest` and the `when($request->input('cycle_day'), …)` filter to `ListTrainingSessionsController` | TC-5 to TC-8 pass |
+| 4 | Add the `cycle_day` rule (`['sometimes', 'uuid']`) to `ListTrainingSessionsRequest` and the `when($request->input('cycle_day'), …)` filter to `ListTrainingSessionsController`; add `->withQueryString()` to its `paginate()` so `links` keep the filters | TC-5 to TC-8 pass |
 | 5 | Add the tests to the four Feature files | All new cases green |
 | 6 | Run Pint, PHPStan and the narrowest Pest runs (the four session files, `ImportCycleDayTest`, cycle tests, `DocsSecurityTest`) | All clean; `composer check` passes |

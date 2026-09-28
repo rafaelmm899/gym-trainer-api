@@ -274,5 +274,6 @@ it('exposes uuids, never internal PKs', function () {
         ->and($response->json('data.days.0.exercises.0.id'))->toMatch(uuidV4Pattern());
 
     $response->assertJsonMissingPath('data.routine_id')
-        ->assertJsonMissingPath('data.days.0.cycle_id');
+        ->assertJsonMissingPath('data.days.0.cycle_id')
+        ->assertJsonMissingPath('data.days.0.cycle');
 });

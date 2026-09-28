@@ -237,3 +237,38 @@ it('returns 404 for an unknown or malformed session id', function (string $id) {
     'unknown uuid' => fn () => (string) Str::uuid(),
     'not a uuid' => 'not-a-uuid',
 ]);
+
+// TC-9
+it('reports the cycle number next to the prescription', function () {
+    $day = CycleDay::factory()->for(Cycle::factory()->for($this->routine)->create(['sequence_number' => 2]))->create();
+    DayExercise::factory()->for($day)->create();
+    $session = TrainingSession::factory()->for($this->user)->for($this->routine)->planned($day)->completed()->create();
+
+    $this->actingAs($this->user)->getJson(showSessionUrl($session))
+        ->assertOk()
+        ->assertJsonPath('data.cycle_day.cycle.sequence_number', 2)
+        ->assertJsonPath('data.cycle_day.cycle.id', $day->cycle->uuid)
+        ->assertJsonCount(1, 'data.cycle_day.exercises');
+});
+
+// TC-10
+it('keeps a free session without a cycle day', function () {
+    $session = TrainingSession::factory()->for($this->user)->for($this->routine)->completed()->create();
+
+    $this->actingAs($this->user)->getJson(showSessionUrl($session))
+        ->assertOk()
+        ->assertJsonPath('data.cycle_day', null);
+});
+
+// TC-15
+it('exposes no cycle data of another user', function () {
+    $owner = User::factory()->create();
+    $ownerRoutine = Routine::factory()->for($owner)->create();
+    $day = CycleDay::factory()->for(Cycle::factory()->for($ownerRoutine))->create();
+    $session = TrainingSession::factory()->for($owner)->for($ownerRoutine)->planned($day)->completed()->create();
+
+    $this->actingAs($this->user)->getJson(showSessionUrl($session))
+        ->assertForbidden()
+        ->assertJsonPath('data.code', 'AUTHORIZATION_EXCEPTION')
+        ->assertJsonMissingPath('data.cycle_day');
+});

@@ -22,6 +22,10 @@ class CycleDayResource extends JsonResource
             'label' => $this->label,
             'focus_muscle_groups' => $this->focus_muscle_groups,
             'rationale' => $this->rationale,
+            'cycle' => $this->whenLoaded('cycle', fn (): array => [
+                'id' => $this->cycle->uuid,
+                'sequence_number' => $this->cycle->sequence_number,
+            ]),
             'exercises' => DayExerciseResource::collection($this->whenLoaded('dayExercises')),
         ];
     }
