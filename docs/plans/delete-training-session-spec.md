@@ -19,7 +19,14 @@
 
 **Kind:** Brownfield Feature — the Session domain (open, log/update sets,
 complete, AI analysis) already ships. This ticket adds the missing
-**undo-a-mistake** slice: a user who opened a session by accident, or opened a
+**undo-a-mistake** slice on top of it.
+
+**Stack:** PHP 8.5 · Laravel 13 · PostgreSQL 17 (runtime) / SQLite `:memory:`
+(tests) · Pest 4 (`pest-plugin-laravel`, `RefreshDatabase` already wired for
+the `Feature` suite) · `laravel/sanctum` 4 (SPA cookie mode) · `dedoc/scramble`
+0.13 · Pint · Larastan level 6. Everything runs in Docker.
+
+**Problem statement:** A user who opened a session by accident, or opened a
 duplicate, or is simply stuck because `TrainingSessionOpeningService` refuses
 a second concurrent `in_progress` session (`SessionInProgressException`), has
 no way to get rid of the stray session and unblock themselves. This ticket
