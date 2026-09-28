@@ -15,6 +15,7 @@ use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
 use App\Http\Controllers\Session\CompleteTrainingSessionController;
+use App\Http\Controllers\Session\ListTrainingSessionsController;
 use App\Http\Controllers\Session\LogSetController;
 use App\Http\Controllers\Session\StoreTrainingSessionController;
 use App\Http\Controllers\Session\UpdateSetLogController;
@@ -89,6 +90,10 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     // Sessions: nested under the routine (bound by uuid). The Form Request
     // delegates authorization to TrainingSessionPolicy::create.
+    Route::get('routines/{routine}/sessions', ListTrainingSessionsController::class)
+        ->whereUuid('routine')
+        ->can('view', 'routine')
+        ->name('routines.sessions.list');
     Route::post('routines/{routine}/sessions', StoreTrainingSessionController::class)
         ->whereUuid('routine')
         ->name('routines.sessions.store');
