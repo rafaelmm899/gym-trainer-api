@@ -2,18 +2,17 @@
 
 namespace App\Actions\Session;
 
+use App\Enums\Session\SessionStatus;
+use App\Exceptions\Session\SessionAlreadyCompletedException;
 use App\Models\TrainingSession;
-use App\Services\Session\SessionDeletionService;
 use Illuminate\Support\Facades\DB;
 
 final class TrainingSessionDeleteAction
 {
-    public function __construct(private SessionDeletionService $deletion) {}
-
     public function handle(TrainingSession $session): void
     {
         DB::transaction(function () use ($session): void {
-            $this->deletion->guard($session);
+            throw_unless($session->status === SessionStatus::InProgress, new SessionAlreadyCompletedException);
 
             $session->delete();
         });

@@ -11,7 +11,7 @@
 > `cascadeOnDelete()`, the `App\Exceptions\Session\` `DomainException`
 > subclasses), `docs/plans/complete-session-spec.md` (the shipped, direct
 > precedent this builds on — `TrainingSessionPolicy`, `SessionAlreadyCompletedException`,
-> the guard-Service pattern, the `sessions/{session}/...` route group), and
+> the `sessions/{session}/...` route group), and
 > `docs/plans/domain-exception-handling-spec.md` (the `DomainException` base
 > and the `{ "data": { "code", "message" } }` error envelope).
 
@@ -30,8 +30,9 @@ the `Feature` suite) · `laravel/sanctum` 4 (SPA cookie mode) · `dedoc/scramble
 duplicate, or is simply stuck because `TrainingSessionOpeningService` refuses
 a second concurrent `in_progress` session (`SessionInProgressException`), has
 no way to get rid of the stray session and unblock themselves. This ticket
-adds exactly one route, one Form Request, one Policy ability, one Action, one
-Service — no schema change, no new exception, no new DTO.
+adds exactly one route, one Form Request, one Policy ability, one Action — no
+schema change, no new exception, no new DTO, no new Service (the single guard
+lives inline in the Action; see §9's "Guard placement" decision).
 
 **Product-owner decisions recorded from this session's brainstorming
 conversation:**
@@ -69,10 +70,8 @@ conversation:**
 - `App\Http\Requests\Session\DeleteTrainingSessionRequest` — no body fields;
   authorization only, via `TrainingSessionPolicy::delete`.
 - `App\Http\Controllers\Session\DeleteTrainingSessionController` — invokable.
-- `App\Actions\Session\TrainingSessionDeleteAction` — the only layer that
-  opens the transaction.
-- `App\Services\Session\SessionDeletionService` — the one business guard
-  (must be `in_progress`).
+- `App\Actions\Session\TrainingSessionDeleteAction` — opens the transaction
+  and holds the one business guard (must be `in_progress`) inline — see §9.
 - `App\Policies\TrainingSessionPolicy::delete(User, TrainingSession)` — new
   ability alongside the existing `create` / `complete`.
 - One route added to the `auth:sanctum` group in `routes/api.php`
@@ -80,9 +79,8 @@ conversation:**
 - `tests/Feature/Auth/DocsSecurityTest.php` — assert the new route inherits
   the global `security` (no new `ArchTest` rule needed: `App\Http\Controllers\Session`
   is already covered by "session controllers are invokable"; `App\Actions`,
-  `App\Services`, `App\Http\Requests` are covered by their own existing
-  blanket rules).
-- Pest feature + unit coverage of every acceptance criterion below.
+  `App\Http\Requests` are covered by their own existing blanket rules).
+- Pest feature coverage of every acceptance criterion below.
 
 **Out of scope:**
 
@@ -97,7 +95,7 @@ conversation:**
 - **Bulk delete / delete-by-routine / delete-on-routine-archive.** One
   session, one request, explicit user action only.
 - **Any change to `TrainingSessionOpeningService`, `SessionCompletionService`,
-  or `SessionAnalystService`.** This ticket only adds a new guard/Service; it
+  or `SessionAnalystService`.** This ticket only adds a new Action-level guard; it
   does not touch the opening, completion, or analysis pipelines beyond the
   natural consequence that deleting the blocking `in_progress` session lets
   `TrainingSessionOpeningService::guard()` pass on the next open attempt
@@ -143,9 +141,10 @@ Notes:
   *planned* `in_progress` session removes only that session row (and its
   sets), never the `cycle_days` row it pointed at.
 - **State guard, not authorization.** Whether the session is `in_progress` is
-  a business rule (`SessionDeletionService` guard → `409`), not a Policy
-  concern — an owned `completed` session still authorizes; it fails later, at
-  the Service. Same split `complete-session-spec.md` already established.
+  a business rule (an inline guard in `TrainingSessionDeleteAction` → `409`),
+  not a Policy concern — an owned `completed` session still authorizes; it
+  fails later, inside the Action. Same split `complete-session-spec.md`
+  already established, just without a dedicated Service class (§9).
 - Errors are rendered as JSON by `App\Exceptions\ApiExceptionRenderer` (wired
   for `api/*` in `bootstrap/app.php`) as
   `{ "data": { "code": "...", "message": "..." } }`. No hand-built JSON, no
@@ -212,8 +211,8 @@ TrainingSession`. This ticket adds one ability alongside the existing
   not-yet-created-resource shape. Foreign session → `AuthorizationException`
   → `403`.
 - The session's `in_progress` / `completed` state is a **business rule**
-  (Service guard → `409`), **not** authorization. An owned `completed`
-  session still authorizes; it fails later, at the Service (§9).
+  (an inline guard in the Action → `409`), **not** authorization. An owned
+  `completed` session still authorizes; it fails later, inside the Action (§9).
 
 ---
 
@@ -231,8 +230,8 @@ Not applicable — no environment variables, no config file changes.
 No change to `bootstrap/app.php`, `config/*`, `bootstrap/providers.php`,
 `phpunit.xml`, `composer.json`, `tests/Feature/ArchTest.php` (every new class
 in this ticket is already covered by an existing blanket rule — "actions are
-final and expose handle()", "services are final", "session controllers are
-invokable", "form requests extend FormRequest"), `docs/plans/data-model.md`
+final and expose handle()", "session controllers are invokable", "form
+requests extend FormRequest"), `docs/plans/data-model.md`
 (no schema change), or `docs/product-context.md` (no new domain vocabulary —
 §2's definition of "Sesión" does not need a deletion clause to stay accurate;
 adding one would be documentation churn with no reader value, `CLAUDE.md`
@@ -305,17 +304,10 @@ foreign keys as the PostgreSQL runtime). Feature tests' `beforeEach` sets
 - **When:** `DELETE /api/v1/sessions/{$session->uuid}`
 - **Expect:** `401`; `assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION')`; session unchanged
 
-### Unit — `tests/Unit/Session/SessionDeletionServiceTest.php`
-
-**TC-9:** `guard()` throws `SessionAlreadyCompletedException` for a `completed` session
-- **Given:** a `TrainingSession` built in-memory (no DB) with `status = SessionStatus::Completed`
-- **When:** `app(SessionDeletionService::class)->guard($session)`
-- **Expect:** throws `SessionAlreadyCompletedException`
-
-**TC-10:** `guard()` does not throw for an `in_progress` session
-- **Given:** a `TrainingSession` built in-memory (no DB) with `status = SessionStatus::InProgress`
-- **When:** `app(SessionDeletionService::class)->guard($session)`
-- **Expect:** no exception thrown
+No dedicated unit test file: the guard is a single inline `throw_unless` in
+`TrainingSessionDeleteAction::handle()` (§9, "Guard placement"), and both of
+its branches are already exercised at the feature level — TC-1 (the
+`in_progress` path passes) and TC-5 (the `completed` path throws).
 
 ---
 
@@ -326,13 +318,13 @@ foreign keys as the PostgreSQL runtime). Feature tests' `beforeEach` sets
 | Scope | Only an `in_progress` session can be deleted; a `completed` one never can, with no override. | Product-owner decision (this session's brainstorming): the use case is correcting mistakes, not rewriting closed history — a `completed` session is permanent, same guarantee `docs/product-context.md` §2 already gives an `archived` routine. |
 | Delete strategy | Hard delete (`$session->delete()`), no `SoftDeletes`. | No model in this codebase uses `SoftDeletes`; restricting scope to `in_progress` already guarantees nothing worth preserving (no `ExerciseRecommendation` can reference an `in_progress` session — only `SessionAnalyzeAction`, post-completion, sets `source_session_id`), so a physical delete carries no hidden data loss. |
 | Guard exception | Reuses the **existing** `SessionAlreadyCompletedException` (`409 SESSION_ALREADY_COMPLETED`) instead of a new exception. | Same underlying condition `SessionCloseAction` already reports under this exact code — the session is `completed`. A second exception meaning the same thing would be needless indirection (`CLAUDE.md` rule 6). Its message text ("Its sets can no longer be changed") stays accurate in spirit: a `completed` session's sets *and* the session row itself are both immutable for the same reason. |
-| Guard placement | A new, single-guard `SessionDeletionService` (not an inline check on the Action). | Matches `SessionCompletionService`'s precedent exactly: business guard clauses live in a Service, never inline on an Action (`CLAUDE.md`: "The pipeline" → Service). One guard is enough to earn the class — mirrors `store-set-logs-spec.md`'s single-guard-per-Service cases, not `SessionCompletionService`'s two-guard one. |
+| Guard placement | Inline `throw_unless(...)` directly in `TrainingSessionDeleteAction::handle()`, not a dedicated Service. | Revised after an initial `SessionDeletionService` (mirroring `SessionCompletionService`'s precedent) was reviewed as adding more indirection than value for a single one-line condition with no other logic to grow into — `CLAUDE.md` rule 6: "A class that only adds indirection is rejected." This is a deliberate, request-driven exception to the general "guard clauses live in a Service" pattern (`CLAUDE.md`: "The pipeline" → Service), justified here specifically because the guard is one line and this Action has nothing else to orchestrate; a guard with more than one condition, or one another Action would need to reuse, should still get its own Service. |
 | Request DTO | None. `DeleteTrainingSessionRequest::rules()` returns `[]`; `TrainingSessionDeleteAction::handle(TrainingSession $session): void` takes no `Data` parameter. | There is no input to type or carry between layers — introducing an empty `Data` class purely to match the general "writes take a `Data` object" convention would be indirection with no payload (`CLAUDE.md` rule 6). |
 | Action return type | `void`, not the deleted `TrainingSession`. | The row no longer exists once `handle()` returns; returning a now-deleted model instance would invite a caller to treat it as still-live data. The controller needs nothing back — it returns `response()->noContent()` regardless. |
 | Response shape | `204 No Content`, empty body — no `JsonResource`. | `CLAUDE.md` rule 3's explicit carve-out: "A no-content action returns `response()->noContent()` (204)." Matches the existing `LogoutController` precedent exactly. |
 | Cascade mechanism | Relies entirely on the pre-existing `set_logs.session_id` `cascadeOnDelete()` foreign key; no PHP code deletes `set_logs` rows. | That FK already exists (`store-set-logs-spec.md`, PR #19) specifically so a session's sets cannot outlive it. Re-implementing the cascade in PHP would duplicate a guarantee the database already gives atomically, and risks drifting out of sync with it. |
 | Route naming | `sessions.destroy`, the standard Laravel resourceful verb for a `DELETE`-on-resource route. | Distinct from this file's custom-action names (`sessions.complete`) — this endpoint deletes the resource itself, the textbook case the `.destroy` convention exists for. |
-| Authorization vs business state | Policy checks ownership only; "not `in_progress`" is a `DomainException` thrown from the Service, not a Policy failure. | Same split `complete-session-spec.md` established: an owned-but-wrong-state resource is a `409` business conflict, never a `403`. |
+| Authorization vs business state | Policy checks ownership only; "not `in_progress`" is a `DomainException` thrown from inside the Action, not a Policy failure. | Same split `complete-session-spec.md` established: an owned-but-wrong-state resource is a `409` business conflict, never a `403`. |
 | No routine-active re-check | Deleting does not re-verify the session's parent routine is still `active`. | Matches the existing precedent for every other session-mutation endpoint (`complete`, the set-logging endpoints) — none of them re-check routine state either. |
 | `TrainingSessionOpeningService` interaction | Left entirely unchanged. Deleting the blocking `in_progress` session is sufficient by itself — its guard already only checks for an *existing* `in_progress` row (`§7`). | No code change needed to produce the desired unblocking effect; changing that Service for this ticket would be scope creep into a pipeline this ticket doesn't own. |
 | No `docs/product-context.md` change | Not touched. | §2's "Sesión" definition doesn't gain new vocabulary from this ticket — it is still "un día de entrenamiento realmente ejecutado"; deletion is an operational affordance for correcting mistakes, not a new domain concept worth documenting there (`CLAUDE.md` rule 5). |
@@ -345,7 +337,7 @@ foreign keys as the PostgreSQL runtime). Feature tests' `beforeEach` sets
 
 Pipeline classes are created before wiring `routes/api.php`. Each task's DoD
 is the artifact existing, passing Pint + PHPStan level 6, and — where the
-class carries logic — its focused test authored in the same task. Task 6 (the
+class carries logic — its focused test authored in the same task. Task 5 (the
 endpoint feature test) is the functional gate. No schema change in this
 ticket, so none of the `CLAUDE.md` "Workflows — database isolation" worktree
 / database-clone steps apply — `docker compose exec app` is used directly
@@ -354,14 +346,13 @@ throughout.
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Add `delete(User $user, TrainingSession $session): bool => $session->user_id === $user->id` to `app/Policies/TrainingSessionPolicy.php`, alongside the existing `create` / `complete`, with a doc-comment matching their style | Pint + PHPStan clean; method present, same signature/shape as `complete`. |
-| 2 | Create `app/Services/Session/SessionDeletionService.php` (`final`): `guard(TrainingSession $session): void` — `throw_unless($session->status === SessionStatus::InProgress, new SessionAlreadyCompletedException)`. Write `tests/Unit/Session/SessionDeletionServiceTest.php` (TC-9, TC-10) | `vendor/bin/pest tests/Unit/Session/SessionDeletionServiceTest.php` green; Pint + PHPStan clean. |
-| 3 | Create `app/Actions/Session/TrainingSessionDeleteAction.php` (`final`, constructor-injects `SessionDeletionService`): `handle(TrainingSession $session): void` — `DB::transaction` closure: `$this->deletion->guard($session)`; `$session->delete()` | `final` + `handle()`; Pint + PHPStan clean; covered indirectly by the feature tests in task 5. |
-| 4 | Create `app/Http/Requests/Session/DeleteTrainingSessionRequest.php` (`make:request`, move to `app/Http/Requests/Session/`, fix namespace): `authorize()` → `$this->user()?->can('delete', $this->route('session')) ?? false`; `rules()` → `[]` | Pint + PHPStan clean; `(new DeleteTrainingSessionRequest)->rules() === []`. |
-| 5 | Create `app/Http/Controllers/Session/DeleteTrainingSessionController.php` (`make:controller --invokable`, move + fix namespace): `__invoke(DeleteTrainingSessionRequest $request, TrainingSession $session, TrainingSessionDeleteAction $action): Response` → `$action->handle($session); return response()->noContent();`. Edit `routes/api.php`: add the `use` import; inside the `auth:sanctum` group, after `sessions.complete`, add `Route::delete('sessions/{session}', DeleteTrainingSessionController::class)->whereUuid('session')->name('sessions.destroy')`. Write `tests/Feature/Session/DeleteTrainingSessionTest.php` (TC-1…TC-8) | `final` class, `__invoke` only; `php artisan route:list` shows the new route under `auth:sanctum`; `vendor/bin/pest tests/Feature/Session/DeleteTrainingSessionTest.php` all green; every TC has a test; Pint + PHPStan clean. |
-| 6 | Add the one `not->toHaveKey('security')` assertion for `/api/v1/sessions/{session}` (`delete`) to `tests/Feature/Auth/DocsSecurityTest.php` | `vendor/bin/pest tests/Feature/Auth/DocsSecurityTest.php` green. |
-| 7 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse` | Pint reports no diffs; PHPStan level 6 clean. |
-| 8 | `composer check` (Pint `--test` + PHPStan level 6 + full Pest — the new Session tests, the Policy addition, the Service unit test, the `DocsSecurityTest` addition) | All three steps green; no regression in Auth / Profile / Routine / Cycle / Session / Recommendation suites. |
-| 9 | Manual check with `curl` against the running app: register + login → `POST /api/v1/routines` → `POST /api/v1/routines/{uuid}/sessions` (`{}`, free session) → `DELETE /api/v1/sessions/{uuid}` (`204`) → `POST /api/v1/routines/{uuid}/sessions` again (`201`, proving the stuck-session block is gone) → open another session, complete it → `DELETE /api/v1/sessions/{uuid}` on the now-`completed` one (`409 SESSION_ALREADY_COMPLETED`). Review `GET /docs/api` | The `curl` calls return the expected codes; `DELETE /api/v1/sessions/{session}` appears in Scramble, marked secured, with no request body and a `204` response. |
+| 2 | Create `app/Actions/Session/TrainingSessionDeleteAction.php` (`final`): `handle(TrainingSession $session): void` — `DB::transaction` closure: `throw_unless($session->status === SessionStatus::InProgress, new SessionAlreadyCompletedException)`; `$session->delete()` | `final` + `handle()`; Pint + PHPStan clean; both guard branches covered indirectly by the feature tests in task 4 (TC-1, TC-5). |
+| 3 | Create `app/Http/Requests/Session/DeleteTrainingSessionRequest.php` (`make:request`, move to `app/Http/Requests/Session/`, fix namespace): `authorize()` → `$this->user()?->can('delete', $this->route('session')) ?? false`; `rules()` → `[]` | Pint + PHPStan clean; `(new DeleteTrainingSessionRequest)->rules() === []`. |
+| 4 | Create `app/Http/Controllers/Session/DeleteTrainingSessionController.php` (`make:controller --invokable`, move + fix namespace): `__invoke(DeleteTrainingSessionRequest $request, TrainingSession $session, TrainingSessionDeleteAction $action): Response` → `$action->handle($session); return response()->noContent();`. Edit `routes/api.php`: add the `use` import; inside the `auth:sanctum` group, after `sessions.complete`, add `Route::delete('sessions/{session}', DeleteTrainingSessionController::class)->whereUuid('session')->name('sessions.destroy')`. Write `tests/Feature/Session/DeleteTrainingSessionTest.php` (TC-1…TC-8) | `final` class, `__invoke` only; `php artisan route:list` shows the new route under `auth:sanctum`; `vendor/bin/pest tests/Feature/Session/DeleteTrainingSessionTest.php` all green; every TC has a test; Pint + PHPStan clean. |
+| 5 | Add the one `not->toHaveKey('security')` assertion for `/api/v1/sessions/{session}` (`delete`) to `tests/Feature/Auth/DocsSecurityTest.php` | `vendor/bin/pest tests/Feature/Auth/DocsSecurityTest.php` green. |
+| 6 | `vendor/bin/pint --dirty`, then `vendor/bin/phpstan analyse` | Pint reports no diffs; PHPStan level 6 clean. |
+| 7 | `composer check` (Pint `--test` + PHPStan level 6 + full Pest — the new Session tests, the Policy addition, the `DocsSecurityTest` addition) | All three steps green; no regression in Auth / Profile / Routine / Cycle / Session / Recommendation suites. |
+| 8 | Manual check with `curl` against the running app: register + login → `POST /api/v1/routines` → `POST /api/v1/routines/{uuid}/sessions` (`{}`, free session) → `DELETE /api/v1/sessions/{uuid}` (`204`) → `POST /api/v1/routines/{uuid}/sessions` again (`201`, proving the stuck-session block is gone) → open another session, complete it → `DELETE /api/v1/sessions/{uuid}` on the now-`completed` one (`409 SESSION_ALREADY_COMPLETED`). Review `GET /docs/api` | The `curl` calls return the expected codes; `DELETE /api/v1/sessions/{session}` appears in Scramble, marked secured, with no request body and a `204` response. |
 
 *Process note: branch name, commit messages and PR text follow `CLAUDE.md` /
 `AGENTS.md` — English only, and no AI attribution anywhere (no
