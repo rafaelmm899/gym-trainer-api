@@ -3,6 +3,7 @@
 namespace App\Http\Resources\Session;
 
 use App\Http\Resources\Cycle\CycleDayResource;
+use App\Http\Resources\Recommendation\ExerciseRecommendationResource;
 use App\Models\TrainingSession;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -28,6 +29,8 @@ class TrainingSessionResource extends JsonResource
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
             'cycle_day' => CycleDayResource::make($this->whenLoaded('cycleDay')),
+            'sets' => SetLogResource::collection($this->whenLoaded('sets')),
+            'recommendations' => ExerciseRecommendationResource::collection($this->whenLoaded('recommendations')),
         ];
     }
 }

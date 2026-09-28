@@ -34,4 +34,17 @@ class TrainingSessionPolicy
     {
         return $session->user_id === $user->id;
     }
+
+    /**
+     * A user may read only a training session they own, in any status, under an
+     * active or archived routine. Enforced through
+     * `ShowTrainingSessionRequest::authorize()`, which runs after route-model
+     * binding: an unknown `{session}` uuid is a 404 before this check, a
+     * foreign one a 403 here. The session's sets and recommendations are loaded
+     * through it, so owning the session is owning them.
+     */
+    public function view(User $user, TrainingSession $session): bool
+    {
+        return $session->user_id === $user->id;
+    }
 }

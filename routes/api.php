@@ -17,6 +17,7 @@ use App\Http\Controllers\Routine\StoreRoutineController;
 use App\Http\Controllers\Session\CompleteTrainingSessionController;
 use App\Http\Controllers\Session\ListTrainingSessionsController;
 use App\Http\Controllers\Session\LogSetController;
+use App\Http\Controllers\Session\ShowTrainingSessionController;
 use App\Http\Controllers\Session\StoreTrainingSessionController;
 use App\Http\Controllers\Session\UpdateSetLogController;
 use Illuminate\Support\Facades\Route;
@@ -100,6 +101,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     // Exercise catalogue: global, read-only, owned by no one — no Policy.
     Route::get('exercises', ListExercisesController::class)->name('exercises.list');
+
+    // One session in full: prescription, sets and recommendations. The Form
+    // Request delegates authorization to TrainingSessionPolicy::view.
+    Route::get('sessions/{session}', ShowTrainingSessionController::class)
+        ->whereUuid('session')
+        ->name('sessions.show');
 
     // Set logs: nested under the session (bound by uuid); the Form Requests
     // delegate authorization to SetLogPolicy. {set} is scoped to {session}.
