@@ -47,4 +47,18 @@ class TrainingSessionPolicy
     {
         return $session->user_id === $user->id;
     }
+
+    /**
+     * A user may delete only a training session they own. Enforced through
+     * `DeleteTrainingSessionRequest::authorize()`
+     * (`$user->can('delete', $this->route('session'))`), which runs after
+     * route-model binding: an unknown `{session}` uuid is a 404 before this
+     * check, a foreign one a 403 here. Whether the session is still
+     * `in_progress` is a business rule (a Service guard), not an
+     * authorization concern.
+     */
+    public function delete(User $user, TrainingSession $session): bool
+    {
+        return $session->user_id === $user->id;
+    }
 }

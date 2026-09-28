@@ -153,7 +153,7 @@ Not applicable — no configuration changes.
 
 | Behavior | Current | New |
 |---|---|---|
-| Reading one session | No endpoint; `GET sessions/{session}` returns 404 (no route matches that path; only the `sets` and `complete` sub-paths are registered) | `GET` returns the session with its prescription, sets and recommendations |
+| Reading one session | No read endpoint; `GET sessions/{session}` returns 405 (only `DELETE sessions/{session}` is registered on that path, plus the `sets` and `complete` sub-paths) | `GET` returns the session with its prescription, sets and recommendations |
 | `TrainingSessionResource` | `cycle_day` is the only relation exposed | Also exposes `sets` and `recommendations`, only when loaded; the list, create and complete responses do not load them and stay unchanged |
 | `TrainingSession` model | Relations `user`, `routine`, `cycleDay`, `sets` | Adds `recommendations` |
 | `TrainingSessionPolicy` | `create`, `complete` | Adds `view` |
