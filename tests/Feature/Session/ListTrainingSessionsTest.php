@@ -6,6 +6,7 @@ use App\Models\Routine;
 use App\Models\TrainingSession;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 beforeEach(function () {
@@ -221,3 +222,118 @@ it('returns 404 for an unknown or malformed routine id', function (string $id) {
     'unknown uuid' => fn () => (string) Str::uuid(),
     'not a uuid' => 'not-a-uuid',
 ]);
+
+// TC-1 (cycle number)
+it('reports the cycle number of each planned session', function () {
+    $dayOne = CycleDay::factory()->for(Cycle::factory()->for($this->routine)->create(['sequence_number' => 1]), 'cycle')->create();
+    $dayTwo = CycleDay::factory()->for(Cycle::factory()->for($this->routine)->create(['sequence_number' => 2]), 'cycle')->create();
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($dayOne)->completed()->create(['started_at' => now()->subDays(2)]);
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($dayTwo)->completed()->create(['started_at' => now()->subDay()]);
+
+    $response = $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine))->assertOk();
+
+    expect($response->json('data.0.cycle_day.cycle.sequence_number'))->toBe(2)
+        ->and($response->json('data.1.cycle_day.cycle.sequence_number'))->toBe(1)
+        ->and($response->json('data.1.cycle_day.cycle.id'))->toBe($dayOne->cycle->uuid);
+});
+
+// TC-2 (cycle number)
+it('keeps free sessions without a cycle', function () {
+    $day = CycleDay::factory()->for(Cycle::factory()->for($this->routine))->create();
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($day)->completed()->create(['started_at' => now()->subDay()]);
+    TrainingSession::factory()->for($this->user)->for($this->routine)->completed()->create(['started_at' => now()]);
+
+    $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine))
+        ->assertOk()
+        ->assertJsonPath('data.0.cycle_day', null)
+        ->assertJsonPath('data.1.cycle_day.cycle.sequence_number', 1);
+});
+
+// TC-3 (cycle number)
+it('shapes the embedded cycle day with its cycle', function () {
+    $day = CycleDay::factory()->for(Cycle::factory()->for($this->routine))->create();
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($day)->completed()->create();
+
+    $response = $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine))
+        ->assertOk()
+        ->assertJsonMissingPath('data.0.cycle_day.exercises');
+
+    expect(array_keys($response->json('data.0.cycle_day')))
+        ->toEqualCanonicalizing(['id', 'order', 'label', 'focus_muscle_groups', 'rationale', 'cycle'])
+        ->and(array_keys($response->json('data.0.cycle_day.cycle')))->toEqualCanonicalizing(['id', 'sequence_number'])
+        ->and($response->json('data.0.cycle_day.cycle.sequence_number'))->toBeInt();
+});
+
+// TC-4
+it('runs the same number of queries whatever the page size', function () {
+    $cycles = collect([1, 2])->map(fn (int $n) => Cycle::factory()->for($this->routine)->create(['sequence_number' => $n]));
+    $days = $cycles->map(fn (Cycle $cycle) => CycleDay::factory()->for($cycle)->create());
+    $countQueries = function (int $perPage): int {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine, "?per_page={$perPage}"))->assertOk();
+        $count = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        return $count;
+    };
+
+    seedCompletedSessions($this->user, $this->routine, 3, ['cycle_day_id' => $days[0]->id]);
+    $small = $countQueries(3);
+    seedCompletedSessions($this->user, $this->routine, 7, ['cycle_day_id' => $days[1]->id]);
+
+    expect($countQueries(10))->toBe($small);
+});
+
+// TC-5
+it('filters the sessions by cycle day', function () {
+    $cycle = Cycle::factory()->for($this->routine)->create();
+    $first = CycleDay::factory()->for($cycle)->create(['order' => 1]);
+    $second = CycleDay::factory()->for($cycle)->create(['order' => 2]);
+    $older = TrainingSession::factory()->for($this->user)->for($this->routine)->planned($first)->completed()->create(['started_at' => now()->subDays(3)]);
+    $newer = TrainingSession::factory()->for($this->user)->for($this->routine)->planned($first)->completed()->create(['started_at' => now()->subDay()]);
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($second)->completed()->create();
+    TrainingSession::factory()->for($this->user)->for($this->routine)->completed()->create();
+
+    $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine, "?cycle_day={$first->uuid}"))
+        ->assertOk()
+        ->assertJsonPath('data.*.id', [$newer->uuid, $older->uuid])
+        ->assertJsonPath('meta.total', 2);
+});
+
+// TC-6
+it('combines the cycle day filter with status and pagination', function () {
+    $day = CycleDay::factory()->for(Cycle::factory()->for($this->routine))->create();
+    TrainingSession::factory()->count(2)->for($this->user)->for($this->routine)->planned($day)->completed()->create();
+    TrainingSession::factory()->for($this->user)->for($this->routine)->planned($day)->create();
+
+    $response = $this->actingAs($this->user)
+        ->getJson(listSessionsUrl($this->routine, "?cycle_day={$day->uuid}&status=completed&per_page=1"))
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('meta.total', 2);
+
+    expect($response->json('links.next'))->toContain("cycle_day={$day->uuid}")->toContain('status=completed');
+});
+
+// TC-7
+it('returns an empty list for a cycle day that matches nothing', function () {
+    $foreignRoutine = Routine::factory()->for(User::factory())->create();
+    $foreignDay = CycleDay::factory()->for(Cycle::factory()->for($foreignRoutine))->create();
+    TrainingSession::factory()->for($foreignRoutine->user)->for($foreignRoutine)->planned($foreignDay)->completed()->create();
+    seedCompletedSessions($this->user, $this->routine);
+
+    foreach ([(string) Str::uuid(), $foreignDay->uuid] as $uuid) {
+        $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine, "?cycle_day={$uuid}"))
+            ->assertOk()
+            ->assertJsonPath('data', []);
+    }
+});
+
+// TC-8
+it('rejects a malformed cycle day', function () {
+    $this->actingAs($this->user)->getJson(listSessionsUrl($this->routine, '?cycle_day=not-a-uuid'))
+        ->assertUnprocessable()
+        ->assertJsonPath('data.code', 'VALIDATION_EXCEPTION')
+        ->assertJsonValidationErrors(['cycle_day'], 'data.errors');
+});

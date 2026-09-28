@@ -12,6 +12,7 @@ final class ShowTrainingSessionController
     public function __invoke(ShowTrainingSessionRequest $request, TrainingSession $session): TrainingSessionResource
     {
         $session->load([
+            'cycleDay.cycle',
             'cycleDay.dayExercises.exercise',
             'sets' => fn (HasMany $sets) => $sets->orderBy('exercise_id')->orderBy('set_number'),
             'sets.exercise',

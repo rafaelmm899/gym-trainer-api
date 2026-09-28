@@ -13,14 +13,19 @@ final class ListTrainingSessionsController
     public function __invoke(ListTrainingSessionsRequest $request, Routine $routine): AnonymousResourceCollection
     {
         $sessions = $routine->trainingSessions()
-            ->with('cycleDay')
+            ->with('cycleDay.cycle')
+            ->when(
+                $request->input('cycle_day'),
+                fn ($query, string $cycleDay) => $query->whereHas('cycleDay', fn ($day) => $day->where('uuid', $cycleDay)),
+            )
             ->when(
                 $request->enum('status', SessionStatus::class),
                 fn ($query, SessionStatus $status) => $query->where('status', $status),
             )
             ->orderByDesc('started_at')
             ->orderByDesc('id')
-            ->paginate($request->integer('per_page', 15));
+            ->paginate($request->integer('per_page', 15))
+            ->withQueryString();
 
         return TrainingSessionResource::collection($sessions);
     }
