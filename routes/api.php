@@ -15,6 +15,7 @@ use App\Http\Controllers\Routine\ListRoutinesController;
 use App\Http\Controllers\Routine\ShowRoutineController;
 use App\Http\Controllers\Routine\StoreRoutineController;
 use App\Http\Controllers\Session\CompleteTrainingSessionController;
+use App\Http\Controllers\Session\DeleteTrainingSessionController;
 use App\Http\Controllers\Session\LogSetController;
 use App\Http\Controllers\Session\StoreTrainingSessionController;
 use App\Http\Controllers\Session\UpdateSetLogController;
@@ -112,4 +113,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('sessions/{session}/complete', CompleteTrainingSessionController::class)
         ->whereUuid('session')
         ->name('sessions.complete');
+
+    // Delete an in_progress session (correcting a mistake / unblocking a
+    // stuck one-open-session-at-a-time state). The Form Request delegates
+    // authorization to TrainingSessionPolicy::delete; a completed session is
+    // a business guard (409), not an authorization concern.
+    Route::delete('sessions/{session}', DeleteTrainingSessionController::class)
+        ->whereUuid('session')
+        ->name('sessions.destroy');
 });
