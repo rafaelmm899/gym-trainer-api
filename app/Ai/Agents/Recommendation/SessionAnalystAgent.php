@@ -25,13 +25,21 @@ use Laravel\Ai\Promptable;
  * validates the result. One call covers every exercise trained in the
  * session — never one call per exercise (`docs/product-context.md` §5).
  *
- * `#[Timeout(30)]` / `#[MaxTokens(2000)]`: far smaller than
- * {@see CyclePlannerAgent}'s 60 s / 7000 tokens — a
- * session-close analysis is a handful of short per-exercise recommendations,
- * not a full 5-day plan.
+ * `#[Timeout(30)]` / `#[MaxTokens(4000)]`: smaller than
+ * {@see CyclePlannerAgent}'s 60 s / 7000 tokens — a session-close analysis is
+ * a handful of short per-exercise recommendations, not a full 5-day plan —
+ * but not as small as that ratio suggests. Groq's `openai/gpt-oss-120b`
+ * spends hidden reasoning tokens against the same `MaxTokens` budget before
+ * it emits the JSON body, so an 8-exercise session (a full day) reliably
+ * exhausted a 2000-token cap and truncated `recommendations` mid-array
+ * (`finish_reason: length`), which then failed the count check in
+ * {@see SessionAnalystService::mapResponse()} — observed in production as
+ * "Expected 8 recommendation(s), got 3" and similar. Same failure mode as
+ * {@see CyclePlannerAgent}, smaller budget because the payload per entry is
+ * smaller.
  */
 #[Timeout(30)]
-#[MaxTokens(2000)]
+#[MaxTokens(4000)]
 final class SessionAnalystAgent implements Agent, HasStructuredOutput
 {
     use Promptable;
