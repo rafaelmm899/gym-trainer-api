@@ -110,10 +110,12 @@ it('copies an exercise that was not performed verbatim and never sends it to the
         ->assertJsonPath('data.days.1.exercises.0.sets', $untrainedSlot->sets)
         ->assertJsonPath('data.days.1.exercises.0.rep_min', $untrainedSlot->rep_min)
         ->assertJsonPath('data.days.1.exercises.0.rep_max', $untrainedSlot->rep_max)
-        ->assertJsonPath('data.days.1.exercises.0.target_weight_kg', (float) $untrainedSlot->target_weight_kg)
-        ->assertJsonPath('data.days.1.exercises.0.target_rpe', (float) $untrainedSlot->target_rpe)
         ->assertJsonPath('data.days.1.exercises.0.rest_seconds', $untrainedSlot->rest_seconds)
         ->assertJsonPath('data.days.1.exercises.0.rationale', $untrainedSlot->rationale);
+
+    // A whole-number decimal (e.g. 8.0) decodes from JSON as an int, so compare loosely.
+    expect($response->json('data.days.1.exercises.0.target_weight_kg'))->toEqual((float) $untrainedSlot->target_weight_kg)
+        ->and($response->json('data.days.1.exercises.0.target_rpe'))->toEqual((float) $untrainedSlot->target_rpe);
 
     CycleProgressionAgent::assertPrompted(fn ($prompt): bool => ! str_contains($prompt->prompt, $untrainedSlot->exercise->name));
 });
