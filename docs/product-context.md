@@ -28,8 +28,8 @@ generación del ciclo de la semana siguiente.
 - **Ciclo** — una **semana** de esa rutina. Tiene `sequence_number` (1, 2, 3…) y
   estado: `active` (semana en curso), `completed` (se entrenaron sus 5 días y
   llegó el siguiente), `incomplete` (llegó el siguiente sin terminarla),
-  `generating` / `failed` (job del ciclo N+1). `draft` queda reservado, sin uso
-  en el MVP. Por ahora **5 días por ciclo**; a futuro configurable.
+  `generating` / `failed` (reservados, sin uso: el ciclo N+1 se genera síncrono).
+  `draft` queda reservado, sin uso en el MVP. Por ahora **5 días por ciclo**; a futuro configurable.
 - **Día del ciclo** — `order` 1..N dentro del ciclo, con `label` (ej. "Pecho") y
   grupos musculares foco. No está atado a un día de la semana concreto; el usuario
   entrena a su ritmo.
@@ -74,10 +74,11 @@ generación del ciclo de la semana siguiente.
    `active` o no nace. Si más adelante quiere retomar
    el estilo de una rutina archivada, no la reactiva: crea una rutina nueva desde
    cero *(clonar una rutina archivada como punto de partida queda fuera de la v1)*.
-3. **La IA arma el ciclo (una semana)** — decide el split (qué grupos musculares
+3. **La IA arma el primer ciclo (una semana)** — decide el split (qué grupos musculares
    por día, 5 días por ahora), elige ejercicios y prescribe series, rango de
    repeticiones, peso objetivo, RPE objetivo y descanso. Devuelve un racional del
-   split y un racional por ejercicio.
+   split y un racional por ejercicio. Solo el **primer** ciclo de una rutina elige
+   ejercicios: los ciclos siguientes los conservan (paso 7).
 4. **Entrenar y registrar, día a día** — el ciclo ya está `active` desde que se
    creó; no hay paso de "activar". Por cada día entrenado el usuario crea una
    sesión y registra **cada serie**: peso, repeticiones, RPE opcional, nota.
@@ -92,12 +93,16 @@ generación del ciclo de la semana siguiente.
    para cada próximo día / ejercicio, el objetivo sugerido (ej. "próximo día de
    pecho → Press banca 82.5 kg, 3×8, subiste las 3×8 a RPE 7").
 7. **Generar el ciclo siguiente** — el usuario pide el ciclo N+1 de la **rutina
-   activa** (bajo demanda, en cualquier momento). Corre en un **job encolado**
-   (`generating` → `active`). La IA recibe: perfil + `goal` y `hint` de la rutina
-   + **recomendaciones de ejercicio activas de esa rutina** + un **resumen de
-   progresión** por ejercicio (prescrito vs. real, tendencia de peso/reps/RPE,
-   señal de estancamiento, y un flag `performed` por ejercicio). Al terminar, en
-   una operación atómica (**rollover**): el ciclo N+1 pasa a `active`; el ciclo
+   activa** (bajo demanda, en cualquier momento), **síncrono** en el mismo request
+   y todo-o-nada. **Los ejercicios de la rutina no cambian**: el backend clona los
+   días y ejercicios del ciclo saliente (solo una rutina nueva cambia ejercicios).
+   La IA solo evalúa y propone la progresión (series, rango de reps, peso, RPE y
+   descanso) de los ejercicios **realizados**; recibe perfil + `goal` y `hint` de
+   la rutina + **recomendaciones de ejercicio activas de esa rutina** + un
+   **resumen de progresión** por ejercicio (prescrito vs. real, tendencia de
+   peso/reps/RPE, señal de estancamiento, y un flag `performed` por ejercicio).
+   Los ejercicios no realizados se copian tal cual y no se envían a la IA. Al
+   terminar, en una operación atómica (**rollover**): el ciclo N+1 pasa a `active`; el ciclo
    saliente pasa a `completed` si se entrenaron sus 5 días, si no a `incomplete`;
    las recomendaciones de ejercicios **entrenados** quedan `applied`, las de
    ejercicios **no entrenados** siguen `active` y repiten objetivo. Vuelve al
@@ -111,8 +116,10 @@ generación del ciclo de la semana siguiente.
 - **Dos momentos de análisis:**
   - *Al cerrar cada sesión* → agente corto que produce las recomendaciones de
     ejercicio de ese día (una llamada por sesión, no una por ejercicio).
-  - *Al generar el ciclo N+1* → agente planificador que arma la semana completa
-    apoyándose en las recomendaciones activas y el resumen de progresión.
+  - *Al generar el ciclo N+1* → agente de progresión que, sobre la estructura ya
+    clonada del ciclo saliente, decide la progresión de los ejercicios realizados
+    apoyándose en las recomendaciones activas y el resumen de progresión. Nunca
+    agrega, quita ni reordena ejercicios.
 - El **resumen de progresión** que consume la IA se calcula en el backend (PHP) a
   partir de los registros de series, para entregar dato limpio y acotado en tokens.
 - **Nombres de ejercicios: IA libre**, pero normalizados. Cuando la IA nombra un
@@ -135,9 +142,9 @@ lo periférico (edición de rutina, históricos, progreso) queda para después.
   `goal`. La anterior se archiva automáticamente y para siempre al crear/activar
   otra. En v1 la rutina no se edita después de crearla.
 - Cada rutina con ciclos semanales (5 días fijos en v1) generados por IA con hint
-  opcional: el **primer ciclo** se genera **síncrono** al crear la rutina; el
-  **ciclo N+1** se genera bajo demanda en un **job encolado** (con estado
-  `generating` y polling).
+  opcional: el **primer ciclo** se genera **síncrono** al crear la rutina y elige
+  los ejercicios; el **ciclo N+1** se genera bajo demanda, también **síncrono**,
+  conservando los ejercicios y progresando solo series/reps/peso/RPE/descanso.
 - Registro de sesiones y series (granularidad por serie) contra el ciclo `active`;
   completar sesión.
 - Análisis por IA al cerrar cada día → recomendaciones de ejercicio en vivo.
@@ -184,8 +191,8 @@ lo periférico (edición de rutina, históricos, progreso) queda para después.
   crear/activar otra archiva la anterior **de forma permanente** (no reactivable,
   no editable, historial visible en solo lectura). Archivar nunca es una acción
   manual independiente: es siempre efecto de activar otra rutina. Dentro de la
-  rutina activa, **un solo ciclo `active` a la vez**; el ciclo N+1 en
-  `generating` no cuenta hasta el rollover.
+  rutina activa, **un solo ciclo `active` a la vez**; el ciclo N+1 no existe
+  hasta que su generación termina (todo-o-nada).
 - Cada rutina tiene su propio `goal`; el `goal` del perfil es la orientación general
   y sirve de valor por defecto al crear una rutina.
 - Si el análisis de una sesión falla, la sesión igual queda completada; la
@@ -200,7 +207,7 @@ lo periférico (edición de rutina, históricos, progreso) queda para después.
 | IA | `laravel/ai ^0.6.8`, agentes `HasStructuredOutput` + `Promptable` |
 | Providers IA | `anthropic` y `openai`, default por env |
 | Auth | Laravel Sanctum (modo SPA: cookie + CSRF) |
-| Async | Job encolado para el ciclo N+1 y para el análisis de sesión (`database` queue en dev). El **primer ciclo** se genera **síncrono** dentro de `POST /routines`. |
+| Async | Job encolado solo para el análisis de sesión (`database` queue en dev). El **primer ciclo** (`POST /routines`) y el **ciclo N+1** (`POST /routines/{routine}/cycles`) se generan **síncronos** en el request. |
 | DB | PostgreSQL 17 (código agnóstico vía Eloquent; MySQL sigue siendo compatible) |
 | Tests | Pest — feature por endpoint, unit para servicios, agentes con respuesta *fake* (sin llamadas reales a la IA) |
 | Estilo | Laravel Pint |
