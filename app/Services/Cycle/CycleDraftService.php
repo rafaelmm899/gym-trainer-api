@@ -70,10 +70,9 @@ final class CycleDraftService
         ]);
 
         foreach ($day->exercises as $index => $exercise) {
-            $catalogued = $this->catalog->resolve($exercise->name, $exercise->primaryMuscleGroup);
-
             $cycleDay->dayExercises()->create([
-                'exercise_id' => $catalogued->id,
+                'exercise_id' => $exercise->exerciseId
+                    ?? $this->catalog->resolve($exercise->name, $exercise->primaryMuscleGroup)->id,
                 'order' => $index + 1,
                 'sets' => $exercise->sets,
                 'rep_min' => $exercise->repMin,

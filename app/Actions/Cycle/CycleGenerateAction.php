@@ -17,8 +17,8 @@ use App\Services\Cycle\ProgressionSummaryService;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Generates cycle N+1 for a routine's active cycle, synchronously and
- * all-or-nothing — the same shape as {@see RoutineCreateAction}:
+ * Generates cycle N+1 for a routine's active cycle — same days and exercises,
+ * progressed — synchronously and all-or-nothing — the same shape as {@see RoutineCreateAction}:
  * guard → plan (outside any transaction) → one transaction that creates the
  * new cycle, persists its days, rolls the outgoing cycle to
  * `completed`/`incomplete`, and marks trained-exercise recommendations
@@ -50,7 +50,7 @@ final class CycleGenerateAction
         // The AI call happens before any transaction — same reasoning as
         // RoutineCreateAction/CyclePlannerService: an external call never runs
         // inside an open transaction.
-        $plan = $this->planner->planNextCycle($profile, $routine->goal, $routine->hint, $recommendations, $summary);
+        $plan = $this->planner->planNextCycle($profile, $routine->goal, $routine->hint, $outgoingCycle, $recommendations, $summary);
 
         return DB::transaction(function () use ($routine, $outgoingCycle, $plan, $summary): Cycle {
             $newCycle = $routine->cycles()->create([
@@ -98,6 +98,7 @@ final class CycleGenerateAction
         return Cycle::query()
             ->where('routine_id', $routine->id)
             ->where('status', CycleStatus::Active)
+            ->with('cycleDays.dayExercises.exercise')
             ->sole();
     }
 }

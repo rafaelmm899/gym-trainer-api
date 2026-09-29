@@ -1,6 +1,7 @@
 <?php
 
 use App\Ai\Agents\Cycle\CyclePlannerAgent;
+use App\Ai\Agents\Cycle\CycleProgressionAgent;
 use App\Ai\Agents\Recommendation\SessionAnalystAgent;
 use App\Models\Cycle;
 use App\Models\CycleDay;
@@ -97,6 +98,52 @@ function cyclePlanPayload(array $overrides = []): array
 function fakeCyclePlanner(array $overrides = []): void
 {
     CyclePlannerAgent::fake(fn (): array => cyclePlanPayload($overrides));
+}
+
+/**
+ * A well-formed structured payload for the AI cycle progression agent: one
+ * progression for every slot the prompt lists (`- day D, exercise E — …`), so
+ * it always answers exactly the slots it was asked about. `$slotOverrides` bends
+ * fields of one slot, keyed `"D.E"`.
+ *
+ * @param  array<string, array<string, mixed>>  $slotOverrides
+ * @param  array<string, mixed>  $rootOverrides
+ * @return array<string, mixed>
+ */
+function cycleProgressionPayload(string $prompt, array $slotOverrides = [], array $rootOverrides = []): array
+{
+    preg_match_all('/^- day (\d+), exercise (\d+) — /m', $prompt, $matches, PREG_SET_ORDER);
+
+    $progressions = array_map(fn (array $match): array => [
+        'day' => (int) $match[1],
+        'exercise' => (int) $match[2],
+        'sets' => 4,
+        'rep_min' => 8,
+        'rep_max' => 10,
+        'target_weight_kg' => 45.0,
+        'target_rpe' => 8.0,
+        'rest_seconds' => 120,
+        'rationale' => 'Hit the top of the range last week, so add a little load.',
+        ...($slotOverrides["{$match[1]}.{$match[2]}"] ?? []),
+    ], $matches);
+
+    return [
+        'split_rationale' => 'Small, steady progression across the trained lifts.',
+        'progressions' => $progressions,
+        ...$rootOverrides,
+    ];
+}
+
+/**
+ * Fake the cycle progression agent so every prompt is answered with
+ * {@see cycleProgressionPayload()} for the slots that prompt lists.
+ *
+ * @param  array<string, array<string, mixed>>  $slotOverrides
+ * @param  array<string, mixed>  $rootOverrides
+ */
+function fakeCycleProgression(array $slotOverrides = [], array $rootOverrides = []): void
+{
+    CycleProgressionAgent::fake(fn (string $prompt): array => cycleProgressionPayload($prompt, $slotOverrides, $rootOverrides));
 }
 
 /**

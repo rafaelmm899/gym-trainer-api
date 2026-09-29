@@ -3,6 +3,7 @@
 namespace App\Services\Cycle;
 
 use App\Ai\Agents\Cycle\CyclePlannerAgent;
+use App\Ai\Agents\Cycle\CycleProgressionAgent;
 use App\Data\Cycle\CyclePlanData;
 use App\Data\Cycle\CyclePlanDayData;
 use App\Data\Cycle\CyclePlanExerciseData;
@@ -12,17 +13,25 @@ use App\Enums\Shared\Goal;
 use App\Enums\Shared\MuscleGroup;
 use App\Exceptions\Cycle\CycleGenerationException;
 use App\Models\AthleteProfile;
+use App\Models\Cycle;
+use App\Models\CycleDay;
+use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use Illuminate\Support\Collection;
 use Laravel\Ai\Responses\StructuredAgentResponse;
 use Throwable;
 
 /**
- * Wraps {@see CyclePlannerAgent}: builds the planning prompt — from the
- * athlete profile plus the routine's goal and hint for the first cycle, or
- * additionally the routine's active recommendations and a progression
- * summary for cycle N+1 — invokes the agent, checks the structured response
- * is a usable 5-day plan, and maps it to {@see CyclePlanData}.
+ * Plans a cycle. The first cycle wraps {@see CyclePlannerAgent}: builds the
+ * planning prompt from the athlete profile plus the routine's goal and hint,
+ * checks the structured response is a usable 5-day plan, and maps it to
+ * {@see CyclePlanData}.
+ *
+ * Cycle N+1 never re-plans: the routine keeps its exercises, so the outgoing
+ * cycle's days and exercises are cloned and {@see CycleProgressionAgent} is
+ * asked only to progress the exercises the athlete actually performed (sets,
+ * rep range, load, RPE, rest). Exercises that were not performed are copied
+ * verbatim and never reach the AI.
  *
  * Every failure — a provider error or an out-of-bounds response — surfaces as
  * {@see CycleGenerationException}. It runs before any database write, so a
@@ -36,44 +45,56 @@ final class CyclePlannerService
     {
         [$minExercises, $maxExercises] = $this->exercisesPerDayRange($profile->experience_level);
 
-        $structured = $this->promptAgent($this->buildPrompt($profile, $goal, $hint, $minExercises, $maxExercises));
+        $structured = $this->promptAgent(CyclePlannerAgent::make(), $this->buildPrompt($profile, $goal, $hint, $minExercises, $maxExercises));
 
         return $this->mapPlan($structured, $minExercises, $maxExercises);
     }
 
     /**
-     * @param  Collection<int, ExerciseRecommendation>  $recommendations  the routine's `active` recommendations, with `exercise` eager-loaded
+     * @param  Cycle  $outgoing  the routine's active cycle, with `cycleDays.dayExercises.exercise` eager-loaded
+     * @param  Collection<int, ExerciseRecommendation>  $recommendations  the routine's `active` recommendations
      * @param  array<int, ExerciseProgressionData>  $progressionSummary  keyed by exercise id, from {@see ProgressionSummaryService}
      */
     public function planNextCycle(
         AthleteProfile $profile,
         Goal $goal,
         ?string $hint,
+        Cycle $outgoing,
         Collection $recommendations,
         array $progressionSummary,
     ): CyclePlanData {
-        [$minExercises, $maxExercises] = $this->exercisesPerDayRange($profile->experience_level);
+        $performed = $outgoing->cycleDays
+            ->flatMap(fn (CycleDay $day) => $day->dayExercises->map(fn (DayExercise $slot): array => [$day, $slot]))
+            ->filter(fn (array $pair): bool => ($progressionSummary[$pair[1]->exercise_id]->performed ?? false))
+            ->mapWithKeys(fn (array $pair): array => [$this->slotKey($pair[0]->order, $pair[1]->order) => $pair[1]]);
 
-        $structured = $this->promptAgent($this->buildNextCyclePrompt(
-            $profile,
-            $goal,
-            $hint,
-            $minExercises,
-            $maxExercises,
-            $recommendations,
-            $progressionSummary,
-        ));
+        if ($performed->isEmpty()) {
+            return $this->cloneOutgoing(
+                $outgoing,
+                'No exercise was trained last cycle; the prescription is unchanged.',
+                [],
+            );
+        }
 
-        return $this->mapPlan($structured, $minExercises, $maxExercises);
+        $structured = $this->promptAgent(
+            CycleProgressionAgent::make(),
+            $this->buildProgressionPrompt($profile, $goal, $hint, $outgoing, $performed, $recommendations, $progressionSummary),
+        );
+
+        return $this->cloneOutgoing(
+            $outgoing,
+            $this->requireString($structured, 'split_rationale'),
+            $this->mapProgressions($structured, $performed),
+        );
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function promptAgent(string $prompt): array
+    private function promptAgent(CyclePlannerAgent|CycleProgressionAgent $agent, string $prompt): array
     {
         try {
-            $response = CyclePlannerAgent::make()->prompt($prompt);
+            $response = $agent->prompt($prompt);
         } catch (Throwable $e) {
             throw new CycleGenerationException(previous: $e);
         }
@@ -108,60 +129,71 @@ final class CyclePlannerService
         $lines = [
             'Build the first training week for this athlete.',
             '',
-            ...$this->athleteAndRoutineLines($profile, $goal, $hint, $minExercises, $maxExercises),
+            ...$this->athleteAndRoutineLines($profile, $goal, $hint),
+            '',
+            'Return exactly 5 training days. All weights are in kilograms.',
+            "Prescribe between {$minExercises} and {$maxExercises} exercises on EVERY day "
+                .'(this athlete\'s experience level); use the higher end for longer sessions.',
+            'Pick ONE count in that range and use it on all 5 days — a day with fewer '
+                ."than {$minExercises} exercises makes the whole plan invalid.",
         ];
 
         return implode("\n", $lines);
     }
 
     /**
+     * One line per performed slot: its current prescription, what the athlete
+     * really did, and the exercise's active recommendation, if any.
+     *
+     * @param  Collection<string, DayExercise>  $performed  keyed by {@see self::slotKey()}
      * @param  Collection<int, ExerciseRecommendation>  $recommendations
      * @param  array<int, ExerciseProgressionData>  $progressionSummary
      */
-    private function buildNextCyclePrompt(
+    private function buildProgressionPrompt(
         AthleteProfile $profile,
         Goal $goal,
         ?string $hint,
-        int $minExercises,
-        int $maxExercises,
+        Cycle $outgoing,
+        Collection $performed,
         Collection $recommendations,
         array $progressionSummary,
     ): string {
+        $recommendationsByExercise = $recommendations->keyBy('exercise_id');
+
         $lines = [
-            'Build the next training week for this athlete, continuing their existing program.',
+            'Review the training week this athlete just finished and progress each exercise listed below. '
+                .'The exercises stay exactly the same; you only decide sets, rep range, load, RPE and rest.',
             '',
-            ...$this->athleteAndRoutineLines($profile, $goal, $hint, $minExercises, $maxExercises),
+            ...$this->athleteAndRoutineLines($profile, $goal, $hint),
+            '',
+            'Slots to progress (day, exercise), all weights in kilograms:',
         ];
 
-        if ($recommendations->isNotEmpty()) {
-            $lines[] = '';
-            $lines[] = 'Active recommendations:';
-
-            foreach ($recommendations as $recommendation) {
-                $lines[] = $this->recommendationLine($recommendation);
+        foreach ($outgoing->cycleDays->sortBy('order') as $day) {
+            foreach ($day->dayExercises->sortBy('order') as $slot) {
+                if ($performed->has($this->slotKey($day->order, $slot->order))) {
+                    $lines[] = $this->slotLine(
+                        $day,
+                        $slot,
+                        $progressionSummary[$slot->exercise_id],
+                        $recommendationsByExercise->get($slot->exercise_id),
+                    );
+                }
             }
         }
 
-        if ($progressionSummary !== []) {
-            $lines[] = '';
-            $lines[] = 'Progression summary:';
-
-            foreach ($progressionSummary as $entry) {
-                $lines[] = $this->progressionLine($entry);
-            }
-        }
+        $lines[] = '';
+        $lines[] = 'Return exactly one progression per listed slot, using the same day and exercise numbers.';
 
         return implode("\n", $lines);
     }
 
     /**
-     * The athlete-profile / routine-goal-and-hint block shared by the first
-     * cycle and cycle N+1 prompts, plus the shared day-count / exercise-count
-     * instructions.
+     * The athlete-profile / routine-goal-and-hint block shared by both prompts.
      *
      * @return list<string>
      */
-    private function athleteAndRoutineLines(AthleteProfile $profile, Goal $goal, ?string $hint, int $minExercises, int $maxExercises): array
+    private function athleteAndRoutineLines(AthleteProfile $profile, Goal $goal, ?string $hint): array
     {
         $lines = [
             'Athlete profile:',
@@ -182,51 +214,134 @@ final class CyclePlannerService
             $lines[] = "- Hint: {$hint}";
         }
 
-        $lines[] = '';
-        $lines[] = 'Return exactly 5 training days. All weights are in kilograms.';
-        $lines[] = "Prescribe between {$minExercises} and {$maxExercises} exercises on EVERY day "
-            .'(this athlete\'s experience level); use the higher end for longer sessions.';
-        $lines[] = 'Pick ONE count in that range and use it on all 5 days — a day with fewer '
-            ."than {$minExercises} exercises makes the whole plan invalid.";
-
         return $lines;
     }
 
-    private function recommendationLine(ExerciseRecommendation $recommendation): string
+    private function slotLine(CycleDay $day, DayExercise $slot, ExerciseProgressionData $entry, ?ExerciseRecommendation $recommendation): string
     {
-        return sprintf(
-            '- %s: %.2fkg, %dx%d-%d, action: %s — %s',
-            $recommendation->exercise->name,
-            $recommendation->target_weight_kg,
-            $recommendation->target_sets,
-            $recommendation->target_rep_min,
-            $recommendation->target_rep_max,
-            $recommendation->action->value,
-            $recommendation->explanation,
-        );
-    }
-
-    /**
-     * A `performed: no` line ends with the literal instruction "no data —
-     * keep the current target" — the marker {@see CyclePlannerService}
-     * tests assert on verbatim, so the planner never invents a target for an
-     * exercise with no real data this outgoing week.
-     */
-    private function progressionLine(ExerciseProgressionData $entry): string
-    {
-        $prescribed = sprintf('%dx%d-%d', $entry->prescribedSets, $entry->prescribedRepMin, $entry->prescribedRepMax);
-        $prescribed .= $entry->prescribedWeightKg !== null ? sprintf(' at %.2fkg', $entry->prescribedWeightKg) : '';
-
-        if (! $entry->performed) {
-            return "- {$entry->exerciseName}: prescribed {$prescribed}, performed: no — no data — keep the current target.";
-        }
+        $prescribed = sprintf('%dx%d-%d', $slot->sets, $slot->rep_min, $slot->rep_max);
+        $prescribed .= $slot->target_weight_kg !== null ? sprintf(' at %.2fkg', $slot->target_weight_kg) : '';
+        $prescribed .= $slot->target_rpe !== null ? sprintf(', RPE %.1f', $slot->target_rpe) : '';
 
         $actual = sprintf('%.2fkg avg x %.1f reps', $entry->actualAvgWeightKg, $entry->actualAvgReps);
         $actual .= $entry->actualMaxRpe !== null ? sprintf(' (max RPE %.1f)', $entry->actualMaxRpe) : '';
 
-        $plateau = $entry->plateauSignal ? ', plateau signal' : '';
+        $line = sprintf(
+            '- day %d, exercise %d — %s: prescribed %s; actual %s; trend: %s%s',
+            $day->order,
+            $slot->order,
+            $slot->exercise->name,
+            $prescribed,
+            $actual,
+            $entry->trend,
+            $entry->plateauSignal ? ', plateau signal' : '',
+        );
 
-        return "- {$entry->exerciseName}: prescribed {$prescribed}, performed: yes, actual {$actual}, trend: {$entry->trend}{$plateau}.";
+        if ($recommendation !== null) {
+            $line .= sprintf(
+                '; recommendation: %s — %.2fkg, %dx%d-%d — %s',
+                $recommendation->action->value,
+                $recommendation->target_weight_kg,
+                $recommendation->target_sets,
+                $recommendation->target_rep_min,
+                $recommendation->target_rep_max,
+                $recommendation->explanation,
+            );
+        }
+
+        return $line;
+    }
+
+    private function slotKey(int $dayOrder, int $exerciseOrder): string
+    {
+        return "{$dayOrder}.{$exerciseOrder}";
+    }
+
+    /**
+     * Validates the AI's progressions against the slots it was asked about —
+     * exactly those, each once — and maps each to a prescription.
+     *
+     * @param  array<string, mixed>  $structured
+     * @param  Collection<string, DayExercise>  $performed  keyed by {@see self::slotKey()}
+     * @return array<string, CyclePlanExerciseData> keyed by {@see self::slotKey()}
+     */
+    private function mapProgressions(array $structured, Collection $performed): array
+    {
+        $progressions = $structured['progressions'] ?? null;
+
+        if (! is_array($progressions) || ! array_is_list($progressions)) {
+            throw new CycleGenerationException('The response is missing its progressions list.');
+        }
+
+        $mapped = [];
+
+        foreach ($progressions as $progression) {
+            if (! is_array($progression)) {
+                throw new CycleGenerationException('Each progression must be an object.');
+            }
+
+            $key = $this->slotKey($this->requireInt($progression, 'day', min: 1), $this->requireInt($progression, 'exercise', min: 1));
+            $slot = $performed->get($key);
+
+            if ($slot === null) {
+                throw new CycleGenerationException("The response progresses a slot that was not asked about ({$key}).");
+            }
+
+            if (isset($mapped[$key])) {
+                throw new CycleGenerationException("The response progresses slot {$key} twice.");
+            }
+
+            $mapped[$key] = $this->mapExercise(
+                [...$progression, 'name' => $slot->exercise->name, 'primary_muscle_group' => $slot->exercise->primary_muscle_group?->value],
+                $slot->exercise_id,
+            );
+        }
+
+        $missing = $performed->keys()->diff(array_keys($mapped));
+
+        if ($missing->isNotEmpty()) {
+            throw new CycleGenerationException('The response is missing progressions for: '.$missing->implode(', ').'.');
+        }
+
+        return $mapped;
+    }
+
+    /**
+     * The outgoing cycle's days and exercises as a plan: each slot takes the
+     * progression keyed for it, or — not performed — is copied verbatim.
+     *
+     * @param  array<string, CyclePlanExerciseData>  $progressions  keyed by {@see self::slotKey()}
+     */
+    private function cloneOutgoing(Cycle $outgoing, string $splitRationale, array $progressions): CyclePlanData
+    {
+        return new CyclePlanData(
+            splitRationale: $splitRationale,
+            days: $outgoing->cycleDays->sortBy('order')->map(fn (CycleDay $day): CyclePlanDayData => new CyclePlanDayData(
+                label: $day->label,
+                focusMuscleGroups: $day->focus_muscle_groups,
+                rationale: $day->rationale,
+                exercises: $day->dayExercises->sortBy('order')->map(
+                    fn (DayExercise $slot): CyclePlanExerciseData => $progressions[$this->slotKey($day->order, $slot->order)]
+                        ?? $this->copyOf($slot),
+                )->values()->all(),
+            ))->values()->all(),
+        );
+    }
+
+    private function copyOf(DayExercise $slot): CyclePlanExerciseData
+    {
+        return new CyclePlanExerciseData(
+            name: $slot->exercise->name,
+            primaryMuscleGroup: $slot->exercise->primary_muscle_group?->value,
+            sets: $slot->sets,
+            repMin: $slot->rep_min,
+            repMax: $slot->rep_max,
+            targetWeightKg: $slot->target_weight_kg !== null ? (float) $slot->target_weight_kg : null,
+            targetRpe: $slot->target_rpe !== null ? (float) $slot->target_rpe : null,
+            restSeconds: $slot->rest_seconds,
+            rationale: $slot->rationale,
+            exerciseId: $slot->exercise_id,
+        );
     }
 
     /**
@@ -280,7 +395,7 @@ final class CyclePlannerService
         );
     }
 
-    private function mapExercise(mixed $exercise): CyclePlanExerciseData
+    private function mapExercise(mixed $exercise, ?int $exerciseId = null): CyclePlanExerciseData
     {
         if (! is_array($exercise)) {
             throw new CycleGenerationException('Each exercise must be an object.');
@@ -296,7 +411,7 @@ final class CyclePlannerService
         $weight = $exercise['target_weight_kg'] ?? null;
 
         if (! is_numeric($weight) || (float) $weight < 0) {
-            throw new CycleGenerationException('Every first-cycle exercise needs a non-negative target_weight_kg.');
+            throw new CycleGenerationException('Every prescribed exercise needs a non-negative target_weight_kg.');
         }
 
         return new CyclePlanExerciseData(
@@ -309,6 +424,7 @@ final class CyclePlannerService
             targetRpe: $this->optionalRpe($exercise['target_rpe'] ?? null),
             restSeconds: $this->requireInt($exercise, 'rest_seconds', min: 0),
             rationale: $this->requireString($exercise, 'rationale'),
+            exerciseId: $exerciseId,
         );
     }
 
