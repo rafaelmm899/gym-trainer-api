@@ -14,18 +14,18 @@ use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Promptable;
 
 /**
- * Structured-output agent that plans one weekly cycle — the routine's first,
- * or cycle N+1 — as a five-day split with a full prescription (sets, rep
- * range, target weight, RPE, rest) and a rationale per day and per exercise.
+ * Structured-output agent that plans a routine's first cycle as a five-day
+ * split with a full prescription (sets, rep range, target weight, RPE, rest)
+ * and a rationale per day and per exercise. Later cycles keep the routine's
+ * exercises and are progressed by {@see CycleProgressionAgent} instead.
  *
- * Wrapped by {@see CyclePlannerService}, which builds the prompt —
- * `planFirstCycle()` from the athlete profile + routine goal/hint,
- * `planNextCycle()` additionally from the routine's active recommendations
- * and a progression summary — and validates the result. Runs on the default
+ * Wrapped by {@see CyclePlannerService}, which builds the prompt in
+ * `planFirstCycle()` from the athlete profile + routine goal/hint and
+ * validates the result. Runs on the default
  * provider (`config('ai.default')`) and its configured text model
  * (`config('ai.providers.<driver>.models.text.default')`, set from the
  * `AI_PROVIDER_MODEL` env var); the 60 s timeout bounds the worst case for the
- * synchronous request (both cycle-generation endpoints run in-request).
+ * synchronous request (the routine-creation endpoint runs it in-request).
  *
  * `#[MaxTokens(7000)]` because a full 5-day plan (6–8 exercises a day, each with
  * a rationale) plus the reasoning the recovery/isolation rule triggers runs to
@@ -48,16 +48,9 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
         $groups = implode(', ', MuscleGroup::values());
 
         return <<<PROMPT
-            You are a strength and hypertrophy coach building one training week
-            for an athlete — either their first week on a new routine, or a
-            continuation of an existing one. When the prompt includes an
-            "Active recommendations" and/or "Progression summary" section,
-            this is a continuation: weight the plan toward that recent
-            training data. A "performed: no" line in the progression summary
-            means the athlete has no real data for that exercise this cycle —
-            keep its current target rather than guessing a new one. When
-            neither section is present, this is the athlete's first week:
-            build the plan from their profile alone.
+            You are a strength and hypertrophy coach building the first training
+            week of a new routine for an athlete: build the plan from their
+            profile, goal and notes alone.
 
             HARD REQUIREMENTS — the response is rejected otherwise:
             - `days` MUST contain EXACTLY 5 entries. Not 3, not 4, not 6 — five.

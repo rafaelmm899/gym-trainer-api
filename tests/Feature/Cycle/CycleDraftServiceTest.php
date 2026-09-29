@@ -1,6 +1,8 @@
 <?php
 
 use App\Data\Cycle\CyclePlanData;
+use App\Data\Cycle\CyclePlanDayData;
+use App\Data\Cycle\CyclePlanExerciseData;
 use App\Enums\Cycle\CycleStatus;
 use App\Enums\Shared\Goal;
 use App\Models\AthleteProfile;
@@ -91,4 +93,31 @@ it('persistDays() writes days/exercises onto an existing cycle without touching 
         ->and($cycle->cycleDays)->toHaveCount(5);
 
     $this->assertDatabaseCount('day_exercises', 25);
+});
+
+// keep-cycle-exercises-spec.md TC-21
+it('persists a prescription that carries an exerciseId against that exact exercise', function () {
+    $cycle = Cycle::factory()->active()->create();
+    $exercise = Exercise::factory()->create(['name' => 'Bench Press', 'slug' => 'legacy-bench-slug']);
+    $plan = new CyclePlanData('Progression.', [
+        new CyclePlanDayData('Chest', ['chest'], 'Chest day.', [
+            new CyclePlanExerciseData(
+                name: 'A Totally Different Name',
+                primaryMuscleGroup: 'chest',
+                sets: 4,
+                repMin: 6,
+                repMax: 8,
+                targetWeightKg: null,
+                targetRpe: null,
+                restSeconds: 120,
+                rationale: 'Cloned.',
+                exerciseId: $exercise->id,
+            ),
+        ]),
+    ]);
+
+    app(CycleDraftService::class)->persistDays($cycle, $plan);
+
+    $this->assertDatabaseHas('day_exercises', ['exercise_id' => $exercise->id, 'target_weight_kg' => null, 'sets' => 4]);
+    expect(Exercise::count())->toBe(1);
 });

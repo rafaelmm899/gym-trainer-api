@@ -1,21 +1,22 @@
 <?php
 
-use App\Ai\Agents\Cycle\CyclePlannerAgent;
+use App\Ai\Agents\Cycle\CycleProgressionAgent;
 use App\Enums\Recommendation\RecommendationStatus;
 use App\Models\AthleteProfile;
 use App\Models\Cycle;
 use App\Models\CycleDay;
+use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\Routine;
 use App\Models\SetLog;
 use App\Models\TrainingSession;
 use App\Models\User;
 
-// TC-1..TC-17 — generate-next-cycle-spec.md §8
+// TC-1..TC-17 — generate-next-cycle-spec.md §8; keep-cycle-exercises-spec.md §8
 
 beforeEach(function () {
     $this->withHeader('Origin', config('app.url'));
-    fakeCyclePlanner();
+    fakeCycleProgression();
     $this->user = User::factory()->create();
     AthleteProfile::factory()->for($this->user)->create();
 });
@@ -33,151 +34,201 @@ function trainDay(Routine $routine, User $user, CycleDay $day): TrainingSession
     return $session;
 }
 
-// TC-1
-it('returns 201 with a real 5-day active cycle', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+/**
+ * The user's routine with its active cycle (5 days x 3 exercises), loaded
+ * with everything `trainDay()` needs.
+ */
+function loadedRoutine(User $user): Routine
+{
+    return trainingRoutineWithCycle($user)->load('cycle.cycleDays.dayExercises.exercise');
+}
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles");
+/**
+ * @return array<int, array<int, array<string, mixed>>> exercise identity per day (by day order) and position, from the database
+ */
+function exerciseLayout(Cycle $cycle): array
+{
+    return $cycle->load('cycleDays.dayExercises')->cycleDays->sortBy('order')
+        ->map(fn (CycleDay $day): array => $day->dayExercises->sortBy('order')->pluck('exercise_id')->values()->all())
+        ->values()
+        ->all();
+}
 
-    $response->assertStatus(201)
-        ->assertJsonPath('data.status', 'active')
-        ->assertJsonPath('data.sequence_number', 2)
-        ->assertJsonCount(5, 'data.days');
-
-    expect($response->json('data.id'))->toMatch(uuidV4Pattern())
-        ->and($response->json('data.split_rationale'))->not->toBe('')
-        ->and($response->json('data.generated_at'))->toMatch(iso8601Pattern());
-
-    $this->assertDatabaseHas('cycles', [
-        'routine_id' => $routine->id,
-        'sequence_number' => 2,
-        'status' => 'active',
-    ]);
-});
-
-// TC-2
-it('rolls the outgoing cycle to completed when all 5 days were trained', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-1
+it('keeps the exact same exercises, days and order in the next cycle', function () {
+    $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
     $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+    $outgoingLayout = exerciseLayout($outgoingCycle);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    expect($outgoingCycle->refresh()->status->value)->toBe('completed')
-        ->and($outgoingCycle->completed_at)->not->toBeNull();
+    $newCycle = Cycle::query()->where('routine_id', $routine->id)->where('sequence_number', 2)->sole();
+    expect(exerciseLayout($newCycle))->toBe($outgoingLayout);
+
+    foreach ($outgoingCycle->cycleDays->sortBy('order')->values() as $index => $day) {
+        $response->assertJsonPath("data.days.{$index}.label", $day->label)
+            ->assertJsonPath("data.days.{$index}.focus_muscle_groups", $day->focus_muscle_groups)
+            ->assertJsonPath("data.days.{$index}.rationale", $day->rationale)
+            ->assertJsonCount($day->dayExercises->count(), "data.days.{$index}.exercises");
+    }
 });
 
-// TC-3
-it('rolls the outgoing cycle to incomplete when fewer than 5 days were trained', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $outgoingCycle = $routine->cycle;
-    $outgoingCycle->cycleDays->take(3)->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+// keep-cycle-exercises-spec.md TC-2
+it('applies the AI progression to the cloned exercises', function () {
+    fakeCycleProgression(
+        ['1.1' => ['sets' => 4, 'rep_min' => 6, 'rep_max' => 8, 'target_weight_kg' => 62.5, 'target_rpe' => 8.0, 'rest_seconds' => 150, 'rationale' => 'Top of range on every set — add load.']],
+        ['split_rationale' => 'Load goes up on the lifts that hit the top of the range.'],
+    );
+    $routine = loadedRoutine($this->user);
+    $outgoingExercise = $routine->cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1)->exercise;
+    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-
-    expect($outgoingCycle->refresh()->status->value)->toBe('incomplete')
-        ->and($outgoingCycle->completed_at)->not->toBeNull();
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(201)
+        ->assertJsonPath('data.split_rationale', 'Load goes up on the lifts that hit the top of the range.')
+        ->assertJsonPath('data.days.0.exercises.0.name', $outgoingExercise->name)
+        ->assertJsonPath('data.days.0.exercises.0.sets', 4)
+        ->assertJsonPath('data.days.0.exercises.0.rep_min', 6)
+        ->assertJsonPath('data.days.0.exercises.0.rep_max', 8)
+        ->assertJsonPath('data.days.0.exercises.0.target_weight_kg', 62.5)
+        ->assertJsonPath('data.days.0.exercises.0.target_rpe', 8)
+        ->assertJsonPath('data.days.0.exercises.0.rest_seconds', 150)
+        ->assertJsonPath('data.days.0.exercises.0.rationale', 'Top of range on every set — add load.');
 });
 
-// TC-4
-it('still rolls over when the outgoing week was never trained at all', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-3
+it('copies an exercise that was not performed verbatim and never sends it to the AI', function () {
+    $routine = loadedRoutine($this->user);
+    $days = $routine->cycle->cycleDays->sortBy('order')->values();
+    $untrainedSlot = $days[1]->dayExercises->firstWhere('order', 1);
+    $days->reject(fn (CycleDay $day): bool => $day->order === 2)->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+
+    $response->assertJsonPath('data.days.1.exercises.0.name', $untrainedSlot->exercise->name)
+        ->assertJsonPath('data.days.1.exercises.0.sets', $untrainedSlot->sets)
+        ->assertJsonPath('data.days.1.exercises.0.rep_min', $untrainedSlot->rep_min)
+        ->assertJsonPath('data.days.1.exercises.0.rep_max', $untrainedSlot->rep_max)
+        ->assertJsonPath('data.days.1.exercises.0.rest_seconds', $untrainedSlot->rest_seconds)
+        ->assertJsonPath('data.days.1.exercises.0.rationale', $untrainedSlot->rationale);
+
+    // A whole-number decimal (e.g. 8.0) decodes from JSON as an int, so compare loosely.
+    expect($response->json('data.days.1.exercises.0.target_weight_kg'))->toEqual((float) $untrainedSlot->target_weight_kg)
+        ->and($response->json('data.days.1.exercises.0.target_rpe'))->toEqual((float) $untrainedSlot->target_rpe);
+
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => ! str_contains($prompt->prompt, $untrainedSlot->exercise->name));
+});
+
+// keep-cycle-exercises-spec.md TC-4 (and generate-next-cycle-spec.md TC-4)
+it('clones the whole cycle without calling the AI when the outgoing week was never trained', function () {
+    $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
+    $outgoingLayout = exerciseLayout($outgoingCycle);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    expect($outgoingCycle->refresh()->status->value)->toBe('incomplete');
+    CycleProgressionAgent::assertNeverPrompted();
+    expect($response->json('data.split_rationale'))->not->toBe('')
+        ->and(exerciseLayout(Cycle::query()->where('routine_id', $routine->id)->where('sequence_number', 2)->sole()))->toBe($outgoingLayout)
+        ->and($outgoingCycle->refresh()->status->value)->toBe('incomplete');
+
     $this->assertDatabaseMissing('exercise_recommendations', ['status' => 'applied']);
 });
 
-// TC-5
-it('marks recommendations for trained exercises applied, leaves untrained ones active', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $days = $routine->cycle->cycleDays;
-
-    $trainedExerciseOne = $days[0]->dayExercises->first()->exercise;
-    $trainedExerciseTwo = $days[1]->dayExercises->first()->exercise;
-    $untrainedExercise = $days[2]->dayExercises->first()->exercise;
-
-    trainDay($routine, $this->user, $days[0]);
-    trainDay($routine, $this->user, $days[1]);
-
-    $trainedRecommendationOne = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($trainedExerciseOne)->create();
-    $trainedRecommendationTwo = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($trainedExerciseTwo)->create();
-    $untrainedRecommendation = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($untrainedExercise)->create();
-
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-
-    expect($trainedRecommendationOne->refresh()->status)->toBe(RecommendationStatus::Applied)
-        ->and($trainedRecommendationTwo->refresh()->status)->toBe(RecommendationStatus::Applied)
-        ->and($untrainedRecommendation->refresh()->status)->toBe(RecommendationStatus::Active);
-});
-
-// TC-6
-it('leaves an already-applied recommendation for a trained exercise applied', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $day = $routine->cycle->cycleDays->first();
-    $exercise = $day->dayExercises->first()->exercise;
-
-    trainDay($routine, $this->user, $day);
-    $recommendation = ExerciseRecommendation::factory()->applied()->for($this->user)->for($routine)->for($exercise)->create();
-
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-
-    expect($recommendation->refresh()->status)->toBe(RecommendationStatus::Applied);
-});
-
-// TC-7
-it('prompts the planner with the profile, routine goal/hint, active recommendations and progression summary', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-5, TC-6
+it('prompts the progression agent with the profile, routine goal/hint, performed slots and active recommendations', function () {
+    $routine = loadedRoutine($this->user);
     $routine->update(['goal' => 'strength', 'hint' => 'Focus on compound lifts.']);
+    $this->user->athleteProfile->update(['notes' => 'Distinctive profile notes.']);
 
-    $day = $routine->cycle->cycleDays->first();
-    $exercise = $day->dayExercises->first()->exercise;
+    $day = $routine->cycle->cycleDays->firstWhere('order', 1);
+    $slot = $day->dayExercises->firstWhere('order', 1);
     trainDay($routine, $this->user, $day);
 
-    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($exercise)->create([
+    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($slot->exercise)->create([
         'action' => 'advance_weight',
         'explanation' => 'Distinctive explanation marker.',
     ]);
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    CyclePlannerAgent::assertPrompted(function ($prompt) use ($exercise): bool {
-        $text = $prompt->prompt;
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'Distinctive profile notes.')
+        && str_contains($prompt->prompt, 'strength')
+        && str_contains($prompt->prompt, 'Focus on compound lifts.')
+        && str_contains($prompt->prompt, "- day 1, exercise 1 — {$slot->exercise->name}: prescribed {$slot->sets}x{$slot->rep_min}-{$slot->rep_max}")
+        && str_contains($prompt->prompt, 'recommendation: advance_weight')
+        && str_contains($prompt->prompt, 'Distinctive explanation marker.')
+        && str_contains($prompt->prompt, 'Return exactly one progression per listed slot'));
 
-        return str_contains($text, 'strength')
-            && str_contains($text, 'Focus on compound lifts.')
-            && str_contains($text, 'advance_weight')
-            && str_contains($text, $exercise->name)
-            && str_contains($text, 'Active recommendations')
-            && str_contains($text, 'Progression summary');
-    });
+    expect((new CycleProgressionAgent)->instructions())->toContain('Never add, remove, replace or reorder exercises');
 });
 
-// TC-8
-it('guides the planner to hold on an unperformed exercise', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $untrainedExercise = $routine->cycle->cycleDays->first()->dayExercises->first()->exercise;
-
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-
-    CyclePlannerAgent::assertPrompted(function ($prompt) use ($untrainedExercise): bool {
-        $text = $prompt->prompt;
-
-        return str_contains($text, $untrainedExercise->name)
-            && str_contains($text, 'Progression summary')
-            && str_contains($text, 'performed: no')
-            && str_contains($text, 'no data — keep the current target');
-    });
-});
-
-// TC-9
-it('returns 502 and persists nothing when the planner throws', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-7, TC-8
+it('returns 502 and persists nothing when the response misses, adds or repeats a slot', function (Closure $mutate) {
+    CycleProgressionAgent::fake(fn (string $prompt): array => $mutate(cycleProgressionPayload($prompt)));
+    $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
-    CyclePlannerAgent::fake(fn () => throw new RuntimeException('provider unavailable'));
+    $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+    $recommendation = ExerciseRecommendation::factory()->for($this->user)->for($routine)
+        ->for($outgoingCycle->cycleDays->first()->dayExercises->first()->exercise)->create();
+
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(502)
+        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+
+    $this->assertDatabaseCount('cycles', 1);
+    expect($outgoingCycle->refresh()->status->value)->toBe('active')
+        ->and($recommendation->refresh()->status)->toBe(RecommendationStatus::Active);
+})->with([
+    'missing slot' => [function (array $payload): array {
+        array_pop($payload['progressions']);
+
+        return $payload;
+    }],
+    'extra slot' => [function (array $payload): array {
+        $payload['progressions'][] = [...$payload['progressions'][0], 'exercise' => 9];
+
+        return $payload;
+    }],
+    'repeated slot' => [function (array $payload): array {
+        $payload['progressions'][] = $payload['progressions'][0];
+
+        return $payload;
+    }],
+    'unknown day' => [function (array $payload): array {
+        $payload['progressions'][] = [...$payload['progressions'][0], 'day' => 6];
+
+        return $payload;
+    }],
+]);
+
+// keep-cycle-exercises-spec.md TC-9
+it('returns 502 and persists nothing for an out-of-bounds progression value', function (array $overrides) {
+    fakeCycleProgression(['1.1' => $overrides]);
+    $routine = loadedRoutine($this->user);
+    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(502)
+        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+
+    $this->assertDatabaseCount('cycles', 1);
+})->with([
+    'zero sets' => [['sets' => 0]],
+    'reps inverted' => [['rep_min' => 10, 'rep_max' => 8]],
+    'negative weight' => [['target_weight_kg' => -5.0]],
+    'rpe above 10' => [['target_rpe' => 11.0]],
+    'negative rest' => [['rest_seconds' => -1]],
+    'blank rationale' => [['rationale' => '']],
+]);
+
+// keep-cycle-exercises-spec.md TC-10 (and generate-next-cycle-spec.md TC-9)
+it('returns 502 and persists nothing when the provider throws', function () {
+    $routine = loadedRoutine($this->user);
+    $outgoingCycle = $routine->cycle;
+    $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+    CycleProgressionAgent::fake(fn () => throw new RuntimeException('provider unavailable'));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
         ->assertStatus(502)
@@ -187,87 +238,131 @@ it('returns 502 and persists nothing when the planner throws', function () {
     expect($outgoingCycle->refresh()->status->value)->toBe('active');
 });
 
-// TC-10
-it('returns 502 and persists nothing for a malformed plan', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $payload = cyclePlanPayload();
-    $payload['days'] = array_slice($payload['days'], 0, 4);
-    CyclePlannerAgent::fake([$payload]);
+// keep-cycle-exercises-spec.md TC-11
+it('keeps an exercise that sits on two days and gives each slot its own returned values', function () {
+    fakeCycleProgression(['1.1' => ['target_weight_kg' => 50.0], '5.1' => ['target_weight_kg' => 55.0]]);
+    $routine = loadedRoutine($this->user);
+    $days = $routine->cycle->cycleDays->sortBy('order')->values();
+    $shared = $days[0]->dayExercises->firstWhere('order', 1)->exercise;
+    $days[4]->dayExercises->firstWhere('order', 1)->update(['exercise_id' => $shared->id]);
+    trainDay($routine, $this->user, $days[0]);
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(502);
+        ->assertStatus(201)
+        ->assertJsonPath('data.days.0.exercises.0.name', $shared->name)
+        ->assertJsonPath('data.days.0.exercises.0.target_weight_kg', 50)
+        ->assertJsonPath('data.days.4.exercises.0.name', $shared->name)
+        ->assertJsonPath('data.days.4.exercises.0.target_weight_kg', 55);
 
-    $this->assertDatabaseCount('cycles', 1);
-    $this->assertDatabaseCount('cycle_days', 5);
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, '- day 1, exercise 1 —')
+        && str_contains($prompt->prompt, '- day 5, exercise 1 —'));
 });
 
-// TC-11
-it('returns 409 ROUTINE_NOT_ACTIVE for an archived routine', function () {
-    $routine = Routine::factory()->archived()->for($this->user)->create();
-    Cycle::factory()->completed()->for($routine)->create();
+// keep-cycle-exercises-spec.md TC-12
+it('clones the outgoing cycle as the user last edited it', function () {
+    $routine = loadedRoutine($this->user);
+    $replacement = Exercise::factory()->create();
+    $routine->cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1)->update(['exercise_id' => $replacement->id]);
+    $routine->load('cycle.cycleDays.dayExercises.exercise');
+    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(409)
-        ->assertJsonPath('data.code', 'ROUTINE_NOT_ACTIVE');
-
-    $this->assertDatabaseCount('cycles', 1);
-    CyclePlannerAgent::assertNeverPrompted();
+        ->assertStatus(201)
+        ->assertJsonPath('data.days.0.exercises.0.name', $replacement->name);
 });
 
-// TC-12
-it('rate-limits a second call within a minute', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-25
+it('clones a day whose exercise count differs from its neighbours as it is', function () {
+    $routine = loadedRoutine($this->user);
+    $routine->cycle->cycleDays->firstWhere('order', 3)->dayExercises->firstWhere('order', 3)->delete();
+    $routine->load('cycle.cycleDays.dayExercises.exercise');
+    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(201)
+        ->assertJsonCount(3, 'data.days.0.exercises')
+        ->assertJsonCount(2, 'data.days.2.exercises');
+});
+
+// keep-cycle-exercises-spec.md TC-13a
+it('rolls the outgoing cycle to completed and marks trained recommendations applied', function () {
+    $routine = loadedRoutine($this->user);
+    $outgoingCycle = $routine->cycle;
+    $days = $outgoingCycle->cycleDays->sortBy('order')->values();
+    $days->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+
+    $trainedOne = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($days[0]->dayExercises->first()->exercise)->create();
+    $trainedTwo = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($days[1]->dayExercises->first()->exercise)->create();
+    $untrained = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($days[2]->dayExercises->last()->exercise)->create();
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(429)
-        ->assertJsonPath('data.code', 'RATE_LIMIT_EXCEPTION');
+    expect($outgoingCycle->refresh()->status->value)->toBe('completed')
+        ->and($outgoingCycle->completed_at)->not->toBeNull()
+        ->and($trainedOne->refresh()->status)->toBe(RecommendationStatus::Applied)
+        ->and($trainedTwo->refresh()->status)->toBe(RecommendationStatus::Applied)
+        ->and($untrained->refresh()->status)->toBe(RecommendationStatus::Active);
 });
 
-// TC-13
-it('rate-limits per user, not globally', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
-    $other = User::factory()->create();
-    AthleteProfile::factory()->for($other)->create();
-    $otherRoutine = trainingRoutineWithCycle($other)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-13b
+it('rolls the outgoing cycle to incomplete when fewer than 5 days were trained', function () {
+    $routine = loadedRoutine($this->user);
+    $outgoingCycle = $routine->cycle;
+    $outgoingCycle->cycleDays->take(3)->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-    $this->actingAs($other)->postJson("/api/v1/routines/{$otherRoutine->uuid}/cycles")->assertStatus(201);
+
+    expect($outgoingCycle->refresh()->status->value)->toBe('incomplete')
+        ->and($outgoingCycle->completed_at)->not->toBeNull();
 });
 
-// TC-14
-it('returns 403 for another user\'s routine', function () {
-    $other = User::factory()->create();
-    AthleteProfile::factory()->for($other)->create();
-    $otherRoutine = trainingRoutineWithCycle($other)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-13c
+it('leaves an already-applied recommendation for a trained exercise applied', function () {
+    $routine = loadedRoutine($this->user);
+    $day = $routine->cycle->cycleDays->first();
+    trainDay($routine, $this->user, $day);
+    $recommendation = ExerciseRecommendation::factory()->applied()->for($this->user)->for($routine)->for($day->dayExercises->first()->exercise)->create();
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$otherRoutine->uuid}/cycles")
-        ->assertStatus(403);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+
+    expect($recommendation->refresh()->status)->toBe(RecommendationStatus::Applied);
+});
+
+// keep-cycle-exercises-spec.md TC-13c — guards
+it('rejects an ineligible request before it reaches the AI', function (string $case) {
+    $other = User::factory()->create();
+    $routine = match ($case) {
+        'archived' => tap(Routine::factory()->archived()->for($this->user)->create(), fn (Routine $r) => Cycle::factory()->completed()->for($r)->create()),
+        'foreign' => trainingRoutineWithCycle($other),
+    };
+
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles");
+
+    match ($case) {
+        'archived' => $response->assertStatus(409)->assertJsonPath('data.code', 'ROUTINE_NOT_ACTIVE'),
+        'foreign' => $response->assertStatus(403),
+    };
 
     $this->assertDatabaseCount('cycles', 1);
-    CyclePlannerAgent::assertNeverPrompted();
-});
+    CycleProgressionAgent::assertNeverPrompted();
+})->with(['archived', 'foreign']);
 
-// TC-15
 it('returns 404 for an unknown routine uuid', function () {
     $this->actingAs($this->user)
         ->postJson('/api/v1/routines/00000000-0000-4000-8000-000000000000/cycles')
         ->assertStatus(404);
 });
 
-// TC-16
 it('returns 401 when unauthenticated', function () {
     $this->postJson('/api/v1/routines/00000000-0000-4000-8000-000000000000/cycles')
         ->assertStatus(401);
 });
 
-// TC-17
-it('exposes uuids, never internal PKs', function () {
-    $routine = trainingRoutineWithCycle($this->user)->load('cycle.cycleDays.dayExercises.exercise');
+// keep-cycle-exercises-spec.md TC-13d
+it('rate-limits a second call within a minute and exposes uuids, never internal PKs', function () {
+    $routine = loadedRoutine($this->user);
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
     expect($response->json('data.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.days.0.id'))->toMatch(uuidV4Pattern())
@@ -276,4 +371,18 @@ it('exposes uuids, never internal PKs', function () {
     $response->assertJsonMissingPath('data.routine_id')
         ->assertJsonMissingPath('data.days.0.cycle_id')
         ->assertJsonMissingPath('data.days.0.cycle');
+
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(429)
+        ->assertJsonPath('data.code', 'RATE_LIMIT_EXCEPTION');
+});
+
+it('rate-limits per user, not globally', function () {
+    $routine = loadedRoutine($this->user);
+    $other = User::factory()->create();
+    AthleteProfile::factory()->for($other)->create();
+    $otherRoutine = loadedRoutine($other);
+
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($other)->postJson("/api/v1/routines/{$otherRoutine->uuid}/cycles")->assertStatus(201);
 });
