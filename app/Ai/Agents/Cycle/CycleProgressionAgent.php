@@ -20,12 +20,14 @@ use Laravel\Ai\Promptable;
  * and exercises itself and only asks this agent about the performed ones,
  * addressed as `(day, exercise)` slots.
  *
- * `#[MaxTokens(4000)]`, well under {@see CyclePlannerAgent}'s 7000: the answer
- * is one short entry per slot, not a full plan with a split. Same
- * strict-mode schema constraints as {@see CyclePlannerAgent::schema()}.
+ * `#[MaxTokens(6000)]`, under {@see CyclePlannerAgent}'s 7000: the answer is
+ * one short entry per slot, not a full plan with a split. Reasoning models
+ * spend the same budget on thinking, so a 5x8 week needs the headroom; keep
+ * each `rationale` to one sentence. Same strict-mode schema constraints as
+ * {@see CyclePlannerAgent::schema()}.
  */
 #[Timeout(60)]
-#[MaxTokens(4000)]
+#[MaxTokens(6000)]
 final class CycleProgressionAgent implements Agent, HasStructuredOutput
 {
     use Promptable;
@@ -63,9 +65,9 @@ final class CycleProgressionAgent implements Agent, HasStructuredOutput
               rep, or one set at a time — not several at once).
             - Change only what the evidence supports; keep the other fields as
               they are.
-            - Give a short `rationale` per slot explaining the change (or why
-              it holds), and a short `split_rationale` summarising the week's
-              progression as a whole.
+            - Give a `rationale` of ONE short sentence per slot explaining the
+              change (or why it holds), and a short `split_rationale`
+              summarising the week's progression as a whole.
             PROMPT;
     }
 
@@ -88,7 +90,7 @@ final class CycleProgressionAgent implements Agent, HasStructuredOutput
                     'target_weight_kg' => $schema->number()->description('Target load in kilograms.'),
                     'target_rpe' => $schema->number()->nullable()->description('Target RPE 0-10, or null.'),
                     'rest_seconds' => $schema->integer(),
-                    'rationale' => $schema->string(),
+                    'rationale' => $schema->string()->description('One short sentence.'),
                 ])),
         ];
 
