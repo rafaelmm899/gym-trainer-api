@@ -78,7 +78,6 @@ it('keeps the exact same exercises, days and order in the next cycle', function 
 it('applies the AI progression to the cloned exercises', function () {
     fakeCycleProgression(
         ['1.1' => ['sets' => 4, 'rep_min' => 6, 'rep_max' => 8, 'target_weight_kg' => 62.5, 'target_rpe' => 8.0, 'rest_seconds' => 150, 'rationale' => 'Top of range on every set — add load.']],
-        ['split_rationale' => 'Load goes up on the lifts that hit the top of the range.'],
     );
     $routine = loadedRoutine($this->user);
     $outgoingExercise = $routine->cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1)->exercise;
@@ -86,7 +85,7 @@ it('applies the AI progression to the cloned exercises', function () {
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
         ->assertStatus(201)
-        ->assertJsonPath('data.split_rationale', 'Load goes up on the lifts that hit the top of the range.')
+        ->assertJsonPath('data.split_rationale', "Progressed 5 of 5 trained days with the AI; the rest used your session recommendations or kept last week's prescription.")
         ->assertJsonPath('data.days.0.exercises.0.name', $outgoingExercise->name)
         ->assertJsonPath('data.days.0.exercises.0.sets', 4)
         ->assertJsonPath('data.days.0.exercises.0.rep_min', 6)
@@ -165,7 +164,7 @@ it('prompts the progression agent with the profile, routine goal/hint, performed
 });
 
 // keep-cycle-exercises-spec.md TC-7, TC-8
-it('returns 502 and persists nothing when the response misses, adds or repeats a slot', function (Closure $mutate) {
+it('falls back to the carried-over prescription when the response misses, adds or repeats a slot', function (Closure $mutate) {
     CycleProgressionAgent::fake(fn (string $prompt): array => $mutate(cycleProgressionPayload($prompt)));
     $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
@@ -173,13 +172,11 @@ it('returns 502 and persists nothing when the response misses, adds or repeats a
     $recommendation = ExerciseRecommendation::factory()->for($this->user)->for($routine)
         ->for($outgoingCycle->cycleDays->first()->dayExercises->first()->exercise)->create();
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(502)
-        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    $this->assertDatabaseCount('cycles', 1);
-    expect($outgoingCycle->refresh()->status->value)->toBe('active')
-        ->and($recommendation->refresh()->status)->toBe(RecommendationStatus::Active);
+    $this->assertDatabaseCount('cycles', 2);
+    expect($outgoingCycle->refresh()->status->value)->toBe('completed')
+        ->and($recommendation->refresh()->status)->toBe(RecommendationStatus::Applied);
 })->with([
     'missing slot' => [function (array $payload): array {
         array_pop($payload['progressions']);
@@ -204,16 +201,14 @@ it('returns 502 and persists nothing when the response misses, adds or repeats a
 ]);
 
 // keep-cycle-exercises-spec.md TC-9
-it('returns 502 and persists nothing for an out-of-bounds progression value', function (array $overrides) {
+it('falls back to the carried-over prescription for an out-of-bounds progression value', function (array $overrides) {
     fakeCycleProgression(['1.1' => $overrides]);
     $routine = loadedRoutine($this->user);
     $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(502)
-        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    $this->assertDatabaseCount('cycles', 1);
+    $this->assertDatabaseCount('cycles', 2);
 })->with([
     'zero sets' => [['sets' => 0]],
     'reps inverted' => [['rep_min' => 10, 'rep_max' => 8]],
@@ -224,18 +219,16 @@ it('returns 502 and persists nothing for an out-of-bounds progression value', fu
 ]);
 
 // keep-cycle-exercises-spec.md TC-10 (and generate-next-cycle-spec.md TC-9)
-it('returns 502 and persists nothing when the provider throws', function () {
+it('falls back to the carried-over prescription when the provider throws', function () {
     $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
     $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
     CycleProgressionAgent::fake(fn () => throw new RuntimeException('provider unavailable'));
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(502)
-        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
 
-    $this->assertDatabaseCount('cycles', 1);
-    expect($outgoingCycle->refresh()->status->value)->toBe('active');
+    $this->assertDatabaseCount('cycles', 2);
+    expect($outgoingCycle->refresh()->status->value)->toBe('completed');
 });
 
 // keep-cycle-exercises-spec.md TC-11
@@ -254,8 +247,8 @@ it('keeps an exercise that sits on two days and gives each slot its own returned
         ->assertJsonPath('data.days.4.exercises.0.name', $shared->name)
         ->assertJsonPath('data.days.4.exercises.0.target_weight_kg', 55);
 
-    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, '- day 1, exercise 1 —')
-        && str_contains($prompt->prompt, '- day 5, exercise 1 —'));
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, '- day 1, exercise 1 —'));
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, '- day 5, exercise 1 —'));
 });
 
 // keep-cycle-exercises-spec.md TC-12

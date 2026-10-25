@@ -128,7 +128,6 @@ function cycleProgressionPayload(string $prompt, array $slotOverrides = [], arra
     ], $matches);
 
     return [
-        'split_rationale' => 'Small, steady progression across the trained lifts.',
         'progressions' => $progressions,
         ...$rootOverrides,
     ];

@@ -192,16 +192,35 @@ function progressionSummaryFor(Cycle $cycle, array $unperformedExerciseIds = [])
         ->all();
 }
 
-function planNext(Cycle $cycle, array $summary, ?AthleteProfile $profile = null): CyclePlanData
+function planNext(Cycle $cycle, array $summary, ?AthleteProfile $profile = null, ?Collection $recommendations = null): CyclePlanData
 {
     return app(CyclePlannerService::class)->planNextCycle(
         $profile ?? AthleteProfile::factory()->create(),
         Goal::Hypertrophy,
         'PPL',
         $cycle,
-        new Collection,
+        $recommendations ?? new Collection,
         $summary,
     );
+}
+
+/**
+ * The AI-less plan: same layout, every slot as prescribed last cycle.
+ */
+function expectCarriedOverPlan(CyclePlanData $plan, Cycle $cycle): void
+{
+    expect($plan->splitRationale)->toContain('Progressed 0 of 5 trained days')
+        ->and($plan->days)->toHaveCount(5);
+
+    foreach ($cycle->cycleDays->sortBy('order')->values() as $index => $day) {
+        foreach ($day->dayExercises->sortBy('order')->values() as $position => $slot) {
+            expect($plan->days[$index]->exercises[$position])
+                ->exerciseId->toBe($slot->exercise_id)
+                ->sets->toBe($slot->sets)
+                ->repMin->toBe($slot->rep_min)
+                ->repMax->toBe($slot->rep_max);
+        }
+    }
 }
 
 // TC-16
@@ -212,7 +231,7 @@ it('planNextCycle() keeps the outgoing structure and applies the AI progression'
     $plan = planNext($cycle, progressionSummaryFor($cycle));
 
     expect($plan->days)->toHaveCount(5)
-        ->and($plan->splitRationale)->toBe('Small, steady progression across the trained lifts.');
+        ->and($plan->splitRationale)->toContain('Progressed 5 of 5 trained days');
 
     foreach ($cycle->cycleDays->sortBy('order')->values() as $index => $day) {
         $planned = $plan->days[$index];
@@ -237,12 +256,11 @@ it('planNextCycle() keeps the outgoing structure and applies the AI progression'
 });
 
 // TC-17
-it('planNextCycle() rejects a malformed progression response', function (array $slotOverrides, array $rootOverrides) {
+it('planNextCycle() carries the prescription over when the progression response is malformed', function (array $slotOverrides, array $rootOverrides) {
     fakeCycleProgression($slotOverrides, $rootOverrides);
     $cycle = outgoingCycleForPlanning();
 
-    expect(fn () => planNext($cycle, progressionSummaryFor($cycle)))
-        ->toThrow(CycleGenerationException::class);
+    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
 })->with([
     'missing progressions list' => [[], ['progressions' => null]],
     'progression that is not an object' => [[], ['progressions' => ['nope']]],
@@ -255,15 +273,13 @@ it('planNextCycle() rejects a malformed progression response', function (array $
     'rpe above 10' => [['1.1' => ['target_rpe' => 11.0]], []],
     'negative rest' => [['1.1' => ['rest_seconds' => -1]], []],
     'blank rationale' => [['1.1' => ['rationale' => ' ']], []],
-    'blank split rationale' => [[], ['split_rationale' => '']],
 ]);
 
-it('planNextCycle() rejects a response that misses, adds or repeats a slot', function (Closure $mutate) {
+it('planNextCycle() carries the prescription over when the response misses, adds or repeats a slot', function (Closure $mutate) {
     CycleProgressionAgent::fake(fn (string $prompt): array => $mutate(cycleProgressionPayload($prompt)));
     $cycle = outgoingCycleForPlanning();
 
-    expect(fn () => planNext($cycle, progressionSummaryFor($cycle)))
-        ->toThrow(CycleGenerationException::class);
+    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
 })->with([
     'missing slot' => [function (array $payload): array {
         array_pop($payload['progressions']);
@@ -325,20 +341,106 @@ it('planNextCycle() clones the whole cycle without calling the AI when nothing w
 });
 
 // TC-19
-it('planNextCycle() wraps a provider exception in CycleGenerationException', function () {
+it('planNextCycle() carries the prescription over when the provider keeps failing', function () {
     CycleProgressionAgent::fake(fn () => throw new RuntimeException('boom'));
     $cycle = outgoingCycleForPlanning();
 
-    $thrown = null;
+    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
+});
 
-    try {
-        planNext($cycle, progressionSummaryFor($cycle));
-    } catch (CycleGenerationException $e) {
-        $thrown = $e;
-    }
+it('planNextCycle() retries the progression agent once before falling back', function () {
+    $calls = 0;
+    CycleProgressionAgent::fake(function (string $prompt) use (&$calls): array {
+        if (++$calls === 1) {
+            throw new RuntimeException('Failed to validate JSON');
+        }
 
-    expect($thrown)->toBeInstanceOf(CycleGenerationException::class)
-        ->and($thrown->getPrevious()->getMessage())->toBe('boom');
+        return cycleProgressionPayload($prompt);
+    });
+    $cycle = outgoingCycleForPlanning();
+
+    $plan = planNext($cycle, progressionSummaryFor($cycle));
+
+    expect($calls)->toBe(6)
+        ->and($plan->splitRationale)->toContain('Progressed 5 of 5 trained days')
+        ->and($plan->days[0]->exercises[0]->sets)->toBe(4);
+});
+
+it('planNextCycle() applies the active recommendation of a performed exercise when falling back', function () {
+    CycleProgressionAgent::fake(fn () => throw new RuntimeException('boom'));
+    $cycle = outgoingCycleForPlanning();
+    $slot = $cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1);
+    $recommendation = ExerciseRecommendation::factory()->for($slot->exercise)->create([
+        'target_weight_kg' => 62.5,
+        'target_sets' => 5,
+        'target_rep_min' => 6,
+        'target_rep_max' => 8,
+        'explanation' => 'Beat the target twice in a row.',
+    ]);
+
+    $plan = planNext($cycle, progressionSummaryFor($cycle), recommendations: collect([$recommendation]));
+
+    expect($plan->days[0]->exercises[0])
+        ->exerciseId->toBe($slot->exercise_id)
+        ->sets->toBe(5)
+        ->repMin->toBe(6)
+        ->repMax->toBe(8)
+        ->targetWeightKg->toBe(62.5)
+        ->rationale->toBe('Beat the target twice in a row.')
+        ->restSeconds->toBe($slot->rest_seconds);
+});
+
+it('planNextCycle() asks the progression agent once per trained day with only that day\'s slots', function () {
+    $prompts = [];
+    CycleProgressionAgent::fake(function (string $prompt) use (&$prompts): array {
+        $prompts[] = $prompt;
+
+        return cycleProgressionPayload($prompt);
+    });
+    $cycle = outgoingCycleForPlanning();
+    $day2Names = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->pluck('exercise.name');
+
+    planNext($cycle, progressionSummaryFor($cycle));
+
+    $day2Prompt = collect($prompts)->first(fn (string $prompt): bool => str_contains($prompt, '- day 2, exercise 1'));
+
+    expect($prompts)->toHaveCount(5)
+        ->and($day2Prompt)->not->toContain('- day 1, exercise 1')
+        ->and($day2Names->every(fn (string $name): bool => str_contains($day2Prompt, $name)))->toBeTrue();
+});
+
+it('planNextCycle() only degrades the day whose response is malformed', function () {
+    $cycle = outgoingCycleForPlanning();
+    $slot = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
+    CycleProgressionAgent::fake(function (string $prompt): array {
+        $payload = cycleProgressionPayload($prompt);
+
+        if (str_contains($prompt, '- day 2, exercise 1')) {
+            array_pop($payload['progressions']);
+        }
+
+        return $payload;
+    });
+
+    $plan = planNext($cycle, progressionSummaryFor($cycle));
+
+    expect($plan->days[0]->exercises[0]->sets)->toBe(4)
+        ->and($plan->days[1]->exercises[0]->sets)->toBe($slot->sets)
+        ->and($plan->splitRationale)->toContain('Progressed 1 of 5 trained days');
+});
+
+it('planNextCycle() stops asking the AI after a day failed twice', function () {
+    $calls = 0;
+    CycleProgressionAgent::fake(function () use (&$calls): never {
+        $calls++;
+
+        throw new RuntimeException('boom');
+    });
+    $cycle = outgoingCycleForPlanning();
+
+    planNext($cycle, progressionSummaryFor($cycle));
+
+    expect($calls)->toBe(2);
 });
 
 // TC-20
