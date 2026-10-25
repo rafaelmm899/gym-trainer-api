@@ -18,6 +18,7 @@ use App\Models\CycleDay;
 use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Responses\StructuredAgentResponse;
 use Throwable;
 
@@ -33,9 +34,11 @@ use Throwable;
  * rep range, load, RPE, rest). Exercises that were not performed are copied
  * verbatim and never reach the AI.
  *
- * Every failure — a provider error or an out-of-bounds response — surfaces as
- * {@see CycleGenerationException}. It runs before any database write, so a
- * failure means nothing is persisted (neither the first cycle nor a rollover).
+ * A first-cycle failure — a provider error or an out-of-bounds response —
+ * surfaces as {@see CycleGenerationException}, before any database write. A
+ * cycle N+1 progression failure is retried once, then degrades to the active
+ * session-analysis recommendations over the cloned cycle, so the rollover
+ * never depends on the provider.
  */
 final class CyclePlannerService
 {
@@ -76,16 +79,96 @@ final class CyclePlannerService
             );
         }
 
-        $structured = $this->promptAgent(
-            CycleProgressionAgent::make(),
-            $this->buildProgressionPrompt($profile, $goal, $hint, $outgoing, $performed, $recommendations, $progressionSummary),
-        );
+        $progressions = [];
+        $aiDays = 0;
+        $aiAvailable = true;
+        $daysWithSlots = $performed->groupBy(fn (DayExercise $slot, string $key): int => (int) explode('.', $key)[0], preserveKeys: true);
+
+        foreach ($daysWithSlots as $dayOrder => $daySlots) {
+            if ($aiAvailable) {
+                try {
+                    // Groq intermittently rejects the model's JSON (HTTP 400), so one more attempt is cheap insurance.
+                    $progressions += retry(2, fn (): array => $this->progressDay($profile, $goal, $hint, $outgoing, $daySlots, $recommendations, $progressionSummary));
+                    $aiDays++;
+
+                    continue;
+                } catch (CycleGenerationException $e) {
+                    // Stop asking a provider that just failed twice; the request has a 150 s budget.
+                    $aiAvailable = false;
+                    Log::warning('Cycle progression AI failed; falling back to session recommendations.', ['day' => $dayOrder, 'exception' => $e]);
+                }
+            }
+
+            $progressions += $this->progressionsFromRecommendations($daySlots, $recommendations);
+        }
 
         return $this->cloneOutgoing(
             $outgoing,
-            $this->requireString($structured, 'split_rationale'),
-            $this->mapProgressions($structured, $performed),
+            "Progressed {$aiDays} of {$daysWithSlots->count()} trained days with the AI; the rest used your session recommendations or kept last week's prescription.",
+            $progressions,
         );
+    }
+
+    /**
+     * One AI call for the performed slots of a single day.
+     *
+     * @param  Collection<string, DayExercise>  $daySlots  keyed by {@see self::slotKey()}
+     * @param  Collection<int, ExerciseRecommendation>  $recommendations
+     * @param  array<int, ExerciseProgressionData>  $progressionSummary
+     * @return array<string, CyclePlanExerciseData> keyed by {@see self::slotKey()}
+     */
+    private function progressDay(
+        AthleteProfile $profile,
+        Goal $goal,
+        ?string $hint,
+        Cycle $outgoing,
+        Collection $daySlots,
+        Collection $recommendations,
+        array $progressionSummary,
+    ): array {
+        $structured = $this->promptAgent(
+            CycleProgressionAgent::make(),
+            $this->buildProgressionPrompt($profile, $goal, $hint, $outgoing, $daySlots, $recommendations, $progressionSummary),
+        );
+
+        return $this->mapProgressions($structured, $daySlots);
+    }
+
+    /**
+     * Offline progression: a performed slot takes its exercise's active
+     * recommendation (from the session analysis); without one it is copied.
+     *
+     * @param  Collection<string, DayExercise>  $performed  keyed by {@see self::slotKey()}
+     * @param  Collection<int, ExerciseRecommendation>  $recommendations
+     * @return array<string, CyclePlanExerciseData> keyed by {@see self::slotKey()}
+     */
+    private function progressionsFromRecommendations(Collection $performed, Collection $recommendations): array
+    {
+        $byExercise = $recommendations->keyBy('exercise_id');
+
+        return $performed
+            ->map(function (DayExercise $slot) use ($byExercise): CyclePlanExerciseData {
+                $copy = $this->copyOf($slot);
+                $recommendation = $byExercise->get($slot->exercise_id);
+
+                if ($recommendation === null) {
+                    return $copy;
+                }
+
+                return new CyclePlanExerciseData(
+                    name: $copy->name,
+                    primaryMuscleGroup: $copy->primaryMuscleGroup,
+                    sets: $recommendation->target_sets,
+                    repMin: $recommendation->target_rep_min,
+                    repMax: $recommendation->target_rep_max,
+                    targetWeightKg: (float) $recommendation->target_weight_kg,
+                    targetRpe: $copy->targetRpe,
+                    restSeconds: $copy->restSeconds,
+                    rationale: $recommendation->explanation,
+                    exerciseId: $copy->exerciseId,
+                );
+            })
+            ->all();
     }
 
     /**
