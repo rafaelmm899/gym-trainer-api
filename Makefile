@@ -48,5 +48,5 @@ stan: ## Run PHPStan / Larastan
 check: ## Pint (check) + PHPStan + Pest
 	$(EXEC) composer check
 
-deploy: ## Build the SPA + image and deploy to Cloud Run (service and jobs)
+deploy: ## Build the SPA + image, migrate and deploy to Cloud Run (jobs and service)
 	docker/production/deploy.sh

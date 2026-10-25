@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the SPA, builds and pushes the production image with Cloud Build, then
-# points the Cloud Run web service and both jobs at that exact image digest
-# (never the moving `:latest` tag, so a deploy is reproducible and revertible).
+# Builds the SPA, builds and pushes the production image with Cloud Build, points
+# both Cloud Run jobs at that exact image digest (never the moving `:latest`
+# tag, so a deploy is reproducible and revertible), runs the migrations with the
+# new image, and only then switches the web service over.
+# There are no long-lived queue workers to restart: `process-queue` is a short
+# job started every couple of minutes, so its next execution already runs the
+# new image; one that is in flight finishes on the old code within its 120 s cap.
 # Run it through `make deploy`; every setting below can be overridden by env.
 
 PROJECT="${GCP_PROJECT:-gym-trainer-api}"
@@ -42,11 +46,17 @@ digest="$(gcloud artifacts docker images describe "$IMAGE:latest" --project "$PR
     --format='value(image_summary.fully_qualified_digest)')"
 [[ -n "$digest" ]] || die "could not resolve the pushed image digest"
 
-echo "==> Deploying $digest"
-gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$digest"
+echo "==> Updating the jobs to $digest"
 for job in "${JOBS[@]}"; do
     gcloud run jobs update "$job" --project "$PROJECT" --region "$REGION" --image "$digest"
 done
+
+echo "==> Running migrations"
+gcloud run jobs execute "${JOBS[0]}" --project "$PROJECT" --region "$REGION" --wait \
+    --args=artisan,migrate,--force
+
+echo "==> Deploying the web service"
+gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$digest"
 
 echo "==> Done. Recent errors:"
 echo "gcloud logging read 'resource.type=\"cloud_run_revision\" AND severity>=ERROR' --project $PROJECT --freshness=10m --limit=10"
