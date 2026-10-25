@@ -1,7 +1,7 @@
 DC := docker compose
 EXEC := $(DC) exec app
 
-.PHONY: help build up down restart logs shell composer artisan migrate fresh test pint stan check
+.PHONY: help build up down restart logs shell composer artisan migrate fresh test pint stan check deploy
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -47,3 +47,6 @@ stan: ## Run PHPStan / Larastan
 
 check: ## Pint (check) + PHPStan + Pest
 	$(EXEC) composer check
+
+deploy: ## Build the SPA + image and deploy to Cloud Run (service and jobs)
+	docker/production/deploy.sh
