@@ -10,8 +10,6 @@ x-app: &app
   image: gym-trainer-api/php:8.5
   volumes:
     - .:/var/www/html
-  env_file:
-    - .env
   depends_on:
     pgsql:
       condition: service_healthy
