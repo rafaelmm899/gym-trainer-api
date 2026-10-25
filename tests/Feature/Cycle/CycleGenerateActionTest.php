@@ -3,7 +3,6 @@
 use App\Actions\Cycle\CycleGenerateAction;
 use App\Ai\Agents\Cycle\CycleProgressionAgent;
 use App\Enums\Cycle\CycleStatus;
-use App\Exceptions\Cycle\CycleGenerationException;
 use App\Exceptions\Cycle\RoutineNotActiveException;
 use App\Models\AthleteProfile;
 use App\Models\Cycle;
@@ -80,7 +79,7 @@ it('throws RoutineNotActiveException for an archived routine and writes nothing'
     $this->assertDatabaseCount('cycles', 1);
 });
 
-it('throws CycleGenerationException and writes nothing when planning fails', function () {
+it('still rolls the cycle over with the prescription carried over when the provider fails', function () {
     $user = User::factory()->create();
     AthleteProfile::factory()->for($user)->create();
     $routine = routineWithTrainedCycle($user);
@@ -88,15 +87,17 @@ it('throws CycleGenerationException and writes nothing when planning fails', fun
 
     CycleProgressionAgent::fake(fn () => throw new RuntimeException('boom'));
 
-    expect(fn () => app(CycleGenerateAction::class)->handle($routine))
-        ->toThrow(CycleGenerationException::class);
+    $newCycle = app(CycleGenerateAction::class)->handle($routine);
 
-    expect($activeCycle->refresh()->status)->toBe(CycleStatus::Active);
-    $this->assertDatabaseCount('cycles', 1);
+    expect($newCycle->sequence_number)->toBe(3)
+        ->and($newCycle->status)->toBe(CycleStatus::Active)
+        ->and($newCycle->split_rationale)->toContain('Progressed 0 of 5 trained days')
+        ->and($activeCycle->refresh()->status)->toBe(CycleStatus::Completed);
+    $this->assertDatabaseCount('cycles', 2);
 });
 
 // TC-15
-it('throws CycleGenerationException and writes nothing when the response does not match the structure', function () {
+it('still rolls the cycle over when the response does not match the structure', function () {
     $user = User::factory()->create();
     AthleteProfile::factory()->for($user)->create();
     $routine = routineWithTrainedCycle($user);
@@ -109,10 +110,9 @@ it('throws CycleGenerationException and writes nothing when the response does no
         return $payload;
     });
 
-    expect(fn () => app(CycleGenerateAction::class)->handle($routine))
-        ->toThrow(CycleGenerationException::class);
+    $newCycle = app(CycleGenerateAction::class)->handle($routine);
 
-    expect($activeCycle->refresh()->status)->toBe(CycleStatus::Active);
-    $this->assertDatabaseCount('cycles', 1);
-    $this->assertDatabaseCount('cycle_days', 5);
+    expect($newCycle->cycleDays)->toHaveCount(5)
+        ->and($activeCycle->refresh()->status)->toBe(CycleStatus::Completed);
+    $this->assertDatabaseCount('cycles', 2);
 });

@@ -17,17 +17,18 @@ use Laravel\Ai\Promptable;
  * exercises of the outgoing cycle and recommends each one's progression for
  * cycle N+1: sets, rep range, load, RPE and rest. It never chooses exercises —
  * {@see CyclePlannerService::planNextCycle()} clones the outgoing cycle's days
- * and exercises itself and only asks this agent about the performed ones,
- * addressed as `(day, exercise)` slots.
+ * and exercises itself and asks this agent about the performed ones of ONE
+ * training day per call, addressed as `(day, exercise)` slots — a short answer
+ * a strict-JSON provider can validate, and a failure costs one day, not the
+ * week.
  *
- * `#[MaxTokens(6000)]`, under {@see CyclePlannerAgent}'s 7000: the answer is
- * one short entry per slot, not a full plan with a split. Reasoning models
- * spend the same budget on thinking, so a 5x8 week needs the headroom; keep
- * each `rationale` to one sentence. Same strict-mode schema constraints as
+ * `#[MaxTokens(2500)]`: one short entry per slot, at most ~8 per day.
+ * Reasoning models spend the same budget on thinking, so keep each
+ * `rationale` to one sentence. Same strict-mode schema constraints as
  * {@see CyclePlannerAgent::schema()}.
  */
 #[Timeout(60)]
-#[MaxTokens(6000)]
+#[MaxTokens(2500)]
 final class CycleProgressionAgent implements Agent, HasStructuredOutput
 {
     use Promptable;
@@ -35,9 +36,9 @@ final class CycleProgressionAgent implements Agent, HasStructuredOutput
     public function instructions(): string
     {
         return <<<'PROMPT'
-            You are a strength and hypertrophy coach reviewing the training week
-            an athlete just finished. The prompt lists every exercise slot they
-            performed, each with its current prescription, what they actually
+            You are a strength and hypertrophy coach reviewing a training day
+            an athlete just finished. The prompt lists the exercise slots of
+            that day they performed, each with its current prescription, what they actually
             did (average load and reps, highest RPE, weight trend, plateau
             signal) and, when there is one, a recommendation from a previous
             session analysis.
@@ -66,8 +67,7 @@ final class CycleProgressionAgent implements Agent, HasStructuredOutput
             - Change only what the evidence supports; keep the other fields as
               they are.
             - Give a `rationale` of ONE short sentence per slot explaining the
-              change (or why it holds), and a short `split_rationale`
-              summarising the week's progression as a whole.
+              change (or why it holds).
             PROMPT;
     }
 
@@ -77,8 +77,6 @@ final class CycleProgressionAgent implements Agent, HasStructuredOutput
     public function schema(JsonSchema $schema): array
     {
         $root = [
-            'split_rationale' => $schema->string()
-                ->description('One or two sentences summarising how the week progresses.'),
             'progressions' => $schema->array()
                 ->description('Exactly one entry per listed slot.')
                 ->items($this->object($schema, [
