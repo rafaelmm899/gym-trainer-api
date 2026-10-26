@@ -33,7 +33,7 @@
 | Method | Path | Auth | Request | Response | Status codes |
 |---|---|---|---|---|---|
 | POST | `/api/v1/routines/{routine}/cycles` | `auth:sanctum` + `RoutinePolicy::generateCycle` | — | `{ "data": Cycle }` with `status: "generating"`, `sequence_number` = N+1, `split_rationale: null` and `days[]` each with `progression_state` (`pending` for trained days, `unchanged` for the rest) | 202; 401; 403; 404; 409 `ROUTINE_NOT_ACTIVE`; 409 `CYCLE_GENERATION_IN_PROGRESS`; 429 (`throttle:1,1`) |
-| GET | `/api/v1/routines/{routine}` | `auth:sanctum` + `RoutinePolicy` | — | `data.cycle` is the routine's latest cycle (`generating`, `active` or `failed`, `days[].progression_state`); `split_rationale` is filled once it is `active` | unchanged |
+| GET | `/api/v1/routines/{routine}` | `auth:sanctum` + `RoutinePolicy` | — | `data.cycle` is the routine's latest cycle (`generating`, `active` or `failed`, `days[].progression_state`); `split_rationale` is filled once it is `active` | 200; 401; 403; 404 |
 
 Cycle day resource gains `progression_state`: `pending` | `ai` | `fallback` | `unchanged`.
 
@@ -43,7 +43,12 @@ Not applicable — no CLI commands.
 
 ### 2.3 Events
 
-Not applicable — no events. The queued jobs are described in §9.
+No domain events are fired. The queue is the second entry point: the jobs below are produced by `POST /routines/{routine}/cycles` and consumed by the `process-queue` worker.
+
+| Event name | Producer | Consumer | Payload | Trigger condition |
+|---|---|---|---|---|
+| `CycleDayProgressionJob` | `CycleGenerateAction` (chain, one per `pending` day; the second and later with `delay(60)`) | Queue worker → `CycleDayProgressAction` | The `CycleDay` of the new cycle | The previous job in the chain succeeded and the delay elapsed |
+| `CycleFinalizeJob` | `CycleGenerateAction` (last job of the chain) | Queue worker → `CycleFinalizeAction` | The new `Cycle` | Every day job succeeded |
 
 ---
 
@@ -173,7 +178,7 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **When:** `CycleDayProgressAction::handle($day, true)`
 - **Expect:** the day is `fallback`; the first exercise has `sets = 5` and `target_weight_kg = 62.50`; the second keeps its cloned sets
 
-**TC-12:** On the last attempt an unusable answer also falls back
+**TC-12:** On the last attempt an unusable answer also falls back (one dataset row per variant)
 - **Given:** an agent answering with a missing slot, a slot of another day, a repeated slot, zero sets, or an inverted rep range
 - **When:** `CycleDayProgressAction::handle($day, true)`
 - **Expect:** the day is `fallback`; its first exercise keeps the outgoing prescription
@@ -234,7 +239,7 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **Expect:** 202; afterwards cycle 2 is `active` with 5 days `ai`; the outgoing cycle is `completed`; the agent was prompted for day 5
 
 **TC-24:** The next cycle keeps exactly the same days and exercises
-- **Given:** a trained active cycle
+- **Given:** an active cycle of 5 days with 3 exercises each, every day with one completed session
 - **When:** `POST /routines/{routine}/cycles`
 - **Expect:** each day of the new cycle keeps the label, focus, rationale and the same ordered `exercise_id` list as the outgoing cycle
 
@@ -254,7 +259,7 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **Expect:** day 1 has `50` and day 5 has `55`; each day was prompted
 
 **TC-28:** The new cycle clones the outgoing cycle as the user last edited it
-- **Given:** an exercise replaced in the active cycle
+- **Given:** an active cycle of 5 days, every day trained, where the first exercise of day 1 was replaced by another catalogue exercise
 - **When:** `POST /routines/{routine}/cycles`
 - **Expect:** the new cycle contains the replacement exercise
 
@@ -263,8 +268,8 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **When:** `POST /routines/{routine}/cycles` on the sync queue
 - **Expect:** the trained exercise's recommendation is `applied`; the other stays `active`
 
-**TC-30:** Ineligible requests are rejected before any AI call
-- **Given:** an archived routine, or another user's routine, or an unknown or non-uuid routine, or no authentication
+**TC-30:** Ineligible requests are rejected before any AI call (one dataset row per variant)
+- **Given:** one of: an archived routine, another user's routine, an unknown routine uuid, a non-uuid path segment, or no authentication
 - **When:** `POST /routines/{routine}/cycles`
 - **Expect:** 409 `ROUTINE_NOT_ACTIVE`, 403, 404 or 401 respectively; the agent is never prompted
 
@@ -288,8 +293,8 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **When:** `CyclePlannerService::progressDay(...)` for day 2
 - **Expect:** keys `2.1`, `2.2`, `2.3`; values as returned; the prompt lists only day 2 slots
 
-**TC-35:** `progressDay()` rejects a malformed answer
-- **Given:** a missing list, a non-object entry, a non-integer day, a non-numeric, null or negative weight, zero sets, inverted reps, RPE above 10, negative rest, a blank rationale, a missing, extra, other-day or repeated slot
+**TC-35:** `progressDay()` rejects a malformed answer (one dataset row per variant)
+- **Given:** one of: a missing list, a non-object entry, a non-integer day, a non-numeric, null or negative weight, zero sets, inverted reps, RPE above 10, negative rest, a blank rationale, a missing, extra, other-day or repeated slot
 - **When:** `CyclePlannerService::progressDay(...)`
 - **Expect:** `CycleGenerationException`
 
@@ -313,10 +318,20 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 - **When:** `GET /routines/{routine}/sessions`
 - **Expect:** the embedded cycle day has the keys `id, order, label, focus_muscle_groups, rationale, progression_state, cycle`
 
-**TC-40:** A planned session can be opened while the next cycle is generating
-- **Given:** a routine with an `active` cycle N and a `generating` cycle N+1
-- **When:** a session is opened planned against a day of cycle N (`TrainingSessionOpeningService::guard`)
-- **Expect:** no exception; a day of the `generating` cycle is rejected with `CycleDayNotInActiveCycleException`
+**TC-40:** A session can be opened on the active cycle while the next cycle is generating
+- **Given:** a routine with an `active` cycle N and a `generating` cycle N+1 that has a day
+- **When:** `POST /routines/{routine}/sessions` with a day of cycle N, and again with the day of cycle N+1
+- **Expect:** 201 with `data.cycle_day.id` = the day of cycle N; 409 with `data.code = CYCLE_DAY_NOT_IN_ACTIVE_CYCLE` for the day of cycle N+1
+
+**TC-41:** The routine returns the generating cycle with the progression state of each day
+- **Given:** a routine with an `active` cycle N and a `generating` cycle N+1 whose days 1 to 3 are `ai`, `pending` and `unchanged`
+- **When:** `GET /routines/{routine}`
+- **Expect:** 200; `data.cycle.id` is cycle N+1, `status = generating`, `split_rationale = null` and `days.*.progression_state = [ai, pending, unchanged]`
+
+**TC-42:** The routine returns a failed cycle so the client can offer a retry
+- **Given:** a routine with an `active` cycle N and a `failed` cycle N+1
+- **When:** `GET /routines/{routine}`
+- **Expect:** 200; `data.cycle.id` is cycle N+1 and `status = failed`
 
 ---
 
@@ -336,6 +351,7 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 | Dispatch | After the creation transaction | If the transaction rolls back no job exists; matches the session analysis convention |
 | Conflict handling | A `generating` cycle makes the next request a 409 | Prevents two chains writing the same cycle |
 | Response | 202 with the generating cycle, in memory as created | The client polls the routine; under the sync queue in tests the in-memory model is stale by design |
+| Test level | The per-day behavior (retry, fallback, rollover) is tested at Action, Job and Service level, plus one end-to-end case through the endpoint on the sync queue (TC-23) | The sync test queue runs every job with one attempt, so the last-attempt fallback is only reachable by calling the Action with `isLastAttempt` |
 | SPA | Separate work, tracked in Notion | API and SPA are different repositories and are deployed together |
 
 ---
@@ -345,12 +361,12 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 | # | Task | Definition of Done |
 |---|---|---|
 | 1 | Add `DayProgressionState`, the `progression_state` migration, the `CycleDay` cast and the resource field | Migration runs on the local Postgres; TC-39 passes |
-| 2 | Add `CycleGenerationInProgressException` (409 `CYCLE_GENERATION_IN_PROGRESS`) | TC-3 and TC-7 pass |
+| 2 | Add `CycleGenerationInProgressException` (409 `CYCLE_GENERATION_IN_PROGRESS`) | The exception exists with code `CYCLE_GENERATION_IN_PROGRESS` and HTTP status 409; it is covered by TC-3 and TC-7 in task 6 |
 | 3 | Split `CyclePlannerService` into `performedSlots`, `cloneDays`, `progressDay` and `progressionsFromRecommendations`; add `CycleDraftService::applyProgressions` | TC-32 to TC-38 pass |
 | 4 | Add `CycleDayProgressAction` and `CycleDayProgressionJob` | TC-8 to TC-13, TC-19 to TC-21 pass |
 | 5 | Add `CycleFinalizeAction` and `CycleFinalizeJob` | TC-14 to TC-18 and TC-22 pass |
-| 6 | Rewrite `CycleGenerateAction` (guards, generating copy, chain dispatch) and answer 202 from `GenerateCycleController` | TC-1 to TC-7 and TC-23 to TC-31 pass |
+| 6 | Rewrite `CycleGenerateAction` (guards, generating copy, chain dispatch) and answer 202 from `GenerateCycleController` | TC-1 to TC-7, TC-23 to TC-31, TC-41 and TC-42 pass |
 | 7 | Switch `TrainingSessionOpeningService` to `Routine::activeCycle()` | TC-40 passes |
-| 8 | Update `routes/api.php` comments, `docs/product-context.md` and this spec | Docs describe the 202 flow |
+| 8 | Update the `routes/api.php` comment on the cycles route, the Async row and the `generating`/`failed` lines of `docs/product-context.md`, and this spec | Each of the three states the 202 flow, the `generating`/`failed` statuses and the `CYCLE_GENERATION_IN_PROGRESS` code (checked by reading the diff) |
 | 9 | Pint, PHPStan and the full Pest suite; loop the new tests three times | `composer check` is green |
 | 10 | Deploy API and SPA together (`make deploy`) and trigger a generation on the stuck routine | The cycle reaches `active` within about ten minutes; Cloud Run logs show no day left `pending` |
