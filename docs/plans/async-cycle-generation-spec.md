@@ -34,6 +34,8 @@
 |---|---|---|---|---|---|
 | POST | `/api/v1/routines/{routine}/cycles` | `auth:sanctum` + `RoutinePolicy::generateCycle` | — | `{ "data": Cycle }` with `status: "generating"`, `sequence_number` = N+1, `split_rationale: null` and `days[]` each with `progression_state` (`pending` for trained days, `unchanged` for the rest) | 202; 401; 403; 404; 409 `ROUTINE_NOT_ACTIVE`; 409 `CYCLE_GENERATION_IN_PROGRESS`; 429 (`throttle:1,1`) |
 | GET | `/api/v1/routines/{routine}` | `auth:sanctum` + `RoutinePolicy` | — | `data.cycle` is the routine's latest cycle (`generating`, `active` or `failed`, `days[].progression_state`); `split_rationale` is filled once it is `active` | 200; 401; 403; 404 |
+| GET | `/api/v1/routines/{routine}/sessions` | `auth:sanctum` + `TrainingSessionPolicy` | — | Unchanged, except the embedded `cycle_day` gains `progression_state` | 200; 401; 403; 404 |
+| POST | `/api/v1/routines/{routine}/sessions` | `auth:sanctum` + `TrainingSessionPolicy::create` | `{ "day": "<cycle day uuid>" }` | Unchanged. The day is still validated against the routine's active cycle, which stays the active one while the next cycle is `generating` | 201; 401; 403; 404; 409 `CYCLE_DAY_NOT_IN_ACTIVE_CYCLE` (also for a day of a `generating` cycle) |
 
 Cycle day resource gains `progression_state`: `pending` | `ai` | `fallback` | `unchanged`.
 
@@ -351,7 +353,7 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 | Dispatch | After the creation transaction | If the transaction rolls back no job exists; matches the session analysis convention |
 | Conflict handling | A `generating` cycle makes the next request a 409 | Prevents two chains writing the same cycle |
 | Response | 202 with the generating cycle, in memory as created | The client polls the routine; under the sync queue in tests the in-memory model is stale by design |
-| Test level | The per-day behavior (retry, fallback, rollover) is tested at Action, Job and Service level, plus one end-to-end case through the endpoint on the sync queue (TC-23) | The sync test queue runs every job with one attempt, so the last-attempt fallback is only reachable by calling the Action with `isLastAttempt` |
+| Test level | The per-day behavior (retry, fallback, rollover) is tested at Action, Job and Service level, plus one end-to-end case through the endpoint on the sync queue (TC-23). TC-32 to TC-38 are service-level tests of the pieces the day job calls, and TC-8, TC-11 and TC-12 exercise them through the Action | The sync test queue runs every job with one attempt, so the last-attempt fallback is only reachable by calling the Action with `isLastAttempt` |
 | SPA | Separate work, tracked in Notion | API and SPA are different repositories and are deployed together |
 
 ---
@@ -367,6 +369,6 @@ Production runs the queue as the short Cloud Run job `process-queue` (`queue:wor
 | 5 | Add `CycleFinalizeAction` and `CycleFinalizeJob` | TC-14 to TC-18 and TC-22 pass |
 | 6 | Rewrite `CycleGenerateAction` (guards, generating copy, chain dispatch) and answer 202 from `GenerateCycleController` | TC-1 to TC-7, TC-23 to TC-31, TC-41 and TC-42 pass |
 | 7 | Switch `TrainingSessionOpeningService` to `Routine::activeCycle()` | TC-40 passes |
-| 8 | Update the `routes/api.php` comment on the cycles route, the Async row and the `generating`/`failed` lines of `docs/product-context.md`, and this spec | Each of the three states the 202 flow, the `generating`/`failed` statuses and the `CYCLE_GENERATION_IN_PROGRESS` code (checked by reading the diff) |
+| 8 | Update the `routes/api.php` comment on the cycles route, the Async row and the `generating`/`failed` lines of `docs/product-context.md`, and this spec | The `routes/api.php` comment, the Async row of `docs/product-context.md` and this spec each state the 202 flow, and mention the `generating`/`failed` statuses and the code `CYCLE_GENERATION_IN_PROGRESS` (checked by reading the diff) |
 | 9 | Pint, PHPStan and the full Pest suite; loop the new tests three times | `composer check` is green |
-| 10 | Deploy API and SPA together (`make deploy`) and trigger a generation on the stuck routine | The cycle reaches `active` within about ten minutes; Cloud Run logs show no day left `pending` |
+| 10 | Deploy API and SPA together (`make deploy`) and trigger a generation on the stuck routine | `GET /routines/{routine}` shows the new cycle `active` within about ten minutes and none of its days `pending`; the Cloud Run logs show no error, and list a warning for each day that fell back, if any |
