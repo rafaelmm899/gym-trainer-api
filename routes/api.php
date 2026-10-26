@@ -80,10 +80,11 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->whereUuid('day')
         ->name('routines.cycle-days.import');
 
-    // Generate cycle N+1, synchronously and all-or-nothing (same shape as
-    // routines.store). RoutinePolicy::generateCycle gates ownership; whether
-    // the routine is active is a business guard inside the Action (409), not
-    // this Policy. throttle:1,1 — the AI call runs in-request.
+    // Start generating cycle N+1: answers 202 with the cycle `generating` and
+    // lets queued jobs (one per trained day) fill it in; the client polls the
+    // routine. RoutinePolicy::generateCycle gates ownership; whether the routine
+    // is active or already generating is a business guard inside the Action
+    // (409), not this Policy. throttle:1,1 stops double taps.
     Route::post('routines/{routine}/cycles', GenerateCycleController::class)
         ->whereUuid('routine')
         ->middleware('throttle:1,1')

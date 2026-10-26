@@ -2,7 +2,6 @@
 
 namespace App\Services\Session;
 
-use App\Enums\Cycle\CycleStatus;
 use App\Enums\Routine\RoutineStatus;
 use App\Enums\Session\SessionStatus;
 use App\Exceptions\Session\CycleDayNotInActiveCycleException;
@@ -24,11 +23,9 @@ final class TrainingSessionOpeningService
         throw_unless($routine->status === RoutineStatus::Active, new RoutineNotActiveException);
 
         if ($day !== null) {
-            $cycle = $routine->cycle()->first();
+            $cycle = $routine->activeCycle()->first();
 
-            $dayIsInActiveCycle = $cycle !== null
-                && $cycle->status === CycleStatus::Active
-                && $day->cycle_id === $cycle->id;
+            $dayIsInActiveCycle = $cycle !== null && $day->cycle_id === $cycle->id;
 
             throw_unless($dayIsInActiveCycle, new CycleDayNotInActiveCycleException);
         }

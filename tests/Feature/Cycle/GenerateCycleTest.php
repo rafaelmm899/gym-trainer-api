@@ -2,6 +2,8 @@
 
 use App\Ai\Agents\Cycle\CycleProgressionAgent;
 use App\Enums\Recommendation\RecommendationStatus;
+use App\Jobs\Cycle\CycleDayProgressionJob;
+use App\Jobs\Cycle\CycleFinalizeJob;
 use App\Models\AthleteProfile;
 use App\Models\Cycle;
 use App\Models\CycleDay;
@@ -11,6 +13,7 @@ use App\Models\Routine;
 use App\Models\SetLog;
 use App\Models\TrainingSession;
 use App\Models\User;
+use Illuminate\Support\Facades\Bus;
 
 // TC-1..TC-17 — generate-next-cycle-spec.md §8; keep-cycle-exercises-spec.md §8
 
@@ -61,7 +64,7 @@ it('keeps the exact same exercises, days and order in the next cycle', function 
     $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
     $outgoingLayout = exerciseLayout($outgoingCycle);
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     $newCycle = Cycle::query()->where('routine_id', $routine->id)->where('sequence_number', 2)->sole();
     expect(exerciseLayout($newCycle))->toBe($outgoingLayout);
@@ -84,8 +87,7 @@ it('applies the AI progression to the cloned exercises', function () {
     $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(201)
-        ->assertJsonPath('data.split_rationale', "Progressed 5 of 5 trained days with the AI; the rest used your session recommendations or kept last week's prescription.")
+        ->assertStatus(202)
         ->assertJsonPath('data.days.0.exercises.0.name', $outgoingExercise->name)
         ->assertJsonPath('data.days.0.exercises.0.sets', 4)
         ->assertJsonPath('data.days.0.exercises.0.rep_min', 6)
@@ -103,7 +105,7 @@ it('copies an exercise that was not performed verbatim and never sends it to the
     $untrainedSlot = $days[1]->dayExercises->firstWhere('order', 1);
     $days->reject(fn (CycleDay $day): bool => $day->order === 2)->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     $response->assertJsonPath('data.days.1.exercises.0.name', $untrainedSlot->exercise->name)
         ->assertJsonPath('data.days.1.exercises.0.sets', $untrainedSlot->sets)
@@ -125,7 +127,7 @@ it('clones the whole cycle without calling the AI when the outgoing week was nev
     $outgoingCycle = $routine->cycle;
     $outgoingLayout = exerciseLayout($outgoingCycle);
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     CycleProgressionAgent::assertNeverPrompted();
     expect($response->json('data.split_rationale'))->not->toBe('')
@@ -150,7 +152,7 @@ it('prompts the progression agent with the profile, routine goal/hint, performed
         'explanation' => 'Distinctive explanation marker.',
     ]);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'Distinctive profile notes.')
         && str_contains($prompt->prompt, 'strength')
@@ -163,72 +165,67 @@ it('prompts the progression agent with the profile, routine goal/hint, performed
     expect((new CycleProgressionAgent)->instructions())->toContain('Never add, remove, replace or reorder exercises');
 });
 
-// keep-cycle-exercises-spec.md TC-7, TC-8
-it('falls back to the carried-over prescription when the response misses, adds or repeats a slot', function (Closure $mutate) {
-    CycleProgressionAgent::fake(fn (string $prompt): array => $mutate(cycleProgressionPayload($prompt)));
+// Cycle N+1 is generated asynchronously: the request only starts it.
+it('answers 202 with the next cycle generating and queues one job per trained day, then the finalize job', function () {
+    Bus::fake();
     $routine = loadedRoutine($this->user);
     $outgoingCycle = $routine->cycle;
-    $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
-    $recommendation = ExerciseRecommendation::factory()->for($this->user)->for($routine)
-        ->for($outgoingCycle->cycleDays->first()->dayExercises->first()->exercise)->create();
+    $trained = $outgoingCycle->cycleDays->sortBy('order')->take(3);
+    $trained->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(202)
+        ->assertJsonPath('data.status', 'generating')
+        ->assertJsonPath('data.sequence_number', 2)
+        ->assertJsonPath('data.days.0.progression_state', 'pending')
+        ->assertJsonPath('data.days.3.progression_state', 'unchanged');
 
-    $this->assertDatabaseCount('cycles', 2);
-    expect($outgoingCycle->refresh()->status->value)->toBe('completed')
-        ->and($recommendation->refresh()->status)->toBe(RecommendationStatus::Applied);
-})->with([
-    'missing slot' => [function (array $payload): array {
-        array_pop($payload['progressions']);
+    Bus::assertChained([
+        fn (CycleDayProgressionJob $job): bool => $job->day->order === 1 && $job->delay === null,
+        fn (CycleDayProgressionJob $job): bool => $job->day->order === 2 && $job->delay === 60,
+        fn (CycleDayProgressionJob $job): bool => $job->day->order === 3 && $job->delay === 60,
+        CycleFinalizeJob::class,
+    ]);
+    expect($outgoingCycle->refresh()->status->value)->toBe('active')
+        ->and(Cycle::query()->where('routine_id', $routine->id)->where('sequence_number', 2)->sole()->status->value)->toBe('generating');
+});
 
-        return $payload;
-    }],
-    'extra slot' => [function (array $payload): array {
-        $payload['progressions'][] = [...$payload['progressions'][0], 'exercise' => 9];
+it('queues only the finalize job when nothing was trained', function () {
+    Bus::fake();
+    $routine = loadedRoutine($this->user);
 
-        return $payload;
-    }],
-    'repeated slot' => [function (array $payload): array {
-        $payload['progressions'][] = $payload['progressions'][0];
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
-        return $payload;
-    }],
-    'unknown day' => [function (array $payload): array {
-        $payload['progressions'][] = [...$payload['progressions'][0], 'day' => 6];
+    Bus::assertChained([CycleFinalizeJob::class]);
+    expect(CycleDay::query()->where('progression_state', 'pending')->count())->toBe(0);
+});
 
-        return $payload;
-    }],
-]);
-
-// keep-cycle-exercises-spec.md TC-9
-it('falls back to the carried-over prescription for an out-of-bounds progression value', function (array $overrides) {
-    fakeCycleProgression(['1.1' => $overrides]);
+it('returns 409 CYCLE_GENERATION_IN_PROGRESS while the next cycle is generating', function () {
+    Bus::fake();
     $routine = loadedRoutine($this->user);
     $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
+    $this->travel(2)->minutes();
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(409)
+        ->assertJsonPath('data.code', 'CYCLE_GENERATION_IN_PROGRESS');
 
     $this->assertDatabaseCount('cycles', 2);
-})->with([
-    'zero sets' => [['sets' => 0]],
-    'reps inverted' => [['rep_min' => 10, 'rep_max' => 8]],
-    'negative weight' => [['target_weight_kg' => -5.0]],
-    'rpe above 10' => [['target_rpe' => 11.0]],
-    'negative rest' => [['rest_seconds' => -1]],
-    'blank rationale' => [['rationale' => '']],
-]);
+});
 
-// keep-cycle-exercises-spec.md TC-10 (and generate-next-cycle-spec.md TC-9)
-it('falls back to the carried-over prescription when the provider throws', function () {
+it('discards a failed attempt and generates the same sequence number again', function () {
+    Bus::fake();
     $routine = loadedRoutine($this->user);
-    $outgoingCycle = $routine->cycle;
-    $outgoingCycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
-    CycleProgressionAgent::fake(fn () => throw new RuntimeException('provider unavailable'));
+    $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
+    $failed = Cycle::factory()->failed()->for($routine)->create(['sequence_number' => 2]);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
+        ->assertStatus(202)
+        ->assertJsonPath('data.status', 'generating');
 
+    $this->assertModelMissing($failed);
     $this->assertDatabaseCount('cycles', 2);
-    expect($outgoingCycle->refresh()->status->value)->toBe('completed');
 });
 
 // keep-cycle-exercises-spec.md TC-11
@@ -241,7 +238,7 @@ it('keeps an exercise that sits on two days and gives each slot its own returned
     trainDay($routine, $this->user, $days[0]);
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(201)
+        ->assertStatus(202)
         ->assertJsonPath('data.days.0.exercises.0.name', $shared->name)
         ->assertJsonPath('data.days.0.exercises.0.target_weight_kg', 50)
         ->assertJsonPath('data.days.4.exercises.0.name', $shared->name)
@@ -260,7 +257,7 @@ it('clones the outgoing cycle as the user last edited it', function () {
     $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(201)
+        ->assertStatus(202)
         ->assertJsonPath('data.days.0.exercises.0.name', $replacement->name);
 });
 
@@ -272,7 +269,7 @@ it('clones a day whose exercise count differs from its neighbours as it is', fun
     $routine->cycle->cycleDays->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
     $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")
-        ->assertStatus(201)
+        ->assertStatus(202)
         ->assertJsonCount(3, 'data.days.0.exercises')
         ->assertJsonCount(2, 'data.days.2.exercises');
 });
@@ -288,7 +285,7 @@ it('rolls the outgoing cycle to completed and marks trained recommendations appl
     $trainedTwo = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($days[1]->dayExercises->first()->exercise)->create();
     $untrained = ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($days[2]->dayExercises->last()->exercise)->create();
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     expect($outgoingCycle->refresh()->status->value)->toBe('completed')
         ->and($outgoingCycle->completed_at)->not->toBeNull()
@@ -303,7 +300,7 @@ it('rolls the outgoing cycle to incomplete when fewer than 5 days were trained',
     $outgoingCycle = $routine->cycle;
     $outgoingCycle->cycleDays->take(3)->each(fn (CycleDay $day) => trainDay($routine, $this->user, $day));
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     expect($outgoingCycle->refresh()->status->value)->toBe('incomplete')
         ->and($outgoingCycle->completed_at)->not->toBeNull();
@@ -316,7 +313,7 @@ it('leaves an already-applied recommendation for a trained exercise applied', fu
     trainDay($routine, $this->user, $day);
     $recommendation = ExerciseRecommendation::factory()->applied()->for($this->user)->for($routine)->for($day->dayExercises->first()->exercise)->create();
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     expect($recommendation->refresh()->status)->toBe(RecommendationStatus::Applied);
 });
@@ -355,7 +352,7 @@ it('returns 401 when unauthenticated', function () {
 it('rate-limits a second call within a minute and exposes uuids, never internal PKs', function () {
     $routine = loadedRoutine($this->user);
 
-    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
+    $response = $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
 
     expect($response->json('data.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.days.0.id'))->toMatch(uuidV4Pattern())
@@ -376,6 +373,6 @@ it('rate-limits per user, not globally', function () {
     AthleteProfile::factory()->for($other)->create();
     $otherRoutine = loadedRoutine($other);
 
-    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(201);
-    $this->actingAs($other)->postJson("/api/v1/routines/{$otherRoutine->uuid}/cycles")->assertStatus(201);
+    $this->actingAs($this->user)->postJson("/api/v1/routines/{$routine->uuid}/cycles")->assertStatus(202);
+    $this->actingAs($other)->postJson("/api/v1/routines/{$otherRoutine->uuid}/cycles")->assertStatus(202);
 });
