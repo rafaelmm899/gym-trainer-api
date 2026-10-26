@@ -123,3 +123,30 @@ it('renders the resource without triggering a lazy load', function () {
         ->assertOk()
         ->assertJsonMissingPath('data.user');
 });
+
+// async-cycle-generation-spec.md TC-41
+it('returns the generating cycle with the progression state of each day', function () {
+    $routine = trainingRoutineWithCycle($this->user);
+    $generating = Cycle::factory()->generating()->for($routine)->create(['sequence_number' => $routine->cycle->sequence_number + 1]);
+    foreach (['ai', 'pending', 'unchanged'] as $index => $state) {
+        CycleDay::factory()->for($generating)->create(['order' => $index + 1, 'progression_state' => $state]);
+    }
+
+    $response = $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}")->assertOk()
+        ->assertJsonPath('data.cycle.id', $generating->uuid)
+        ->assertJsonPath('data.cycle.status', 'generating')
+        ->assertJsonPath('data.cycle.sequence_number', $generating->sequence_number)
+        ->assertJsonPath('data.cycle.split_rationale', null);
+
+    expect($response->json('data.cycle.days.*.progression_state'))->toBe(['ai', 'pending', 'unchanged']);
+});
+
+// async-cycle-generation-spec.md TC-42
+it('returns the failed cycle so the client can offer a retry', function () {
+    $routine = trainingRoutineWithCycle($this->user);
+    $failed = Cycle::factory()->failed()->for($routine)->create(['sequence_number' => $routine->cycle->sequence_number + 1]);
+
+    $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}")->assertOk()
+        ->assertJsonPath('data.cycle.id', $failed->uuid)
+        ->assertJsonPath('data.cycle.status', 'failed');
+});

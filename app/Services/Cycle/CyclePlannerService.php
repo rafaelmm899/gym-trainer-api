@@ -18,7 +18,6 @@ use App\Models\CycleDay;
 use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Responses\StructuredAgentResponse;
 use Throwable;
 
@@ -34,11 +33,11 @@ use Throwable;
  * rep range, load, RPE, rest). Exercises that were not performed are copied
  * verbatim and never reach the AI.
  *
- * A first-cycle failure — a provider error or an out-of-bounds response —
- * surfaces as {@see CycleGenerationException}, before any database write. A
- * cycle N+1 progression failure is retried once, then degrades to the active
- * session-analysis recommendations over the cloned cycle, so the rollover
- * never depends on the provider.
+ * Every failure — a provider error or an out-of-bounds response — surfaces as
+ * {@see CycleGenerationException}. For cycle N+1 the caller asks one day at a
+ * time (one queued job per day) and decides what a failed day falls back to:
+ * {@see self::progressionsFromRecommendations()}, so the rollover never
+ * depends on the provider.
  */
 final class CyclePlannerService
 {
@@ -54,70 +53,40 @@ final class CyclePlannerService
     }
 
     /**
+     * The slots the athlete trained last cycle, the only ones the AI is asked
+     * about, keyed by {@see self::slotKey()}.
+     *
      * @param  Cycle  $outgoing  the routine's active cycle, with `cycleDays.dayExercises.exercise` eager-loaded
-     * @param  Collection<int, ExerciseRecommendation>  $recommendations  the routine's `active` recommendations
      * @param  array<int, ExerciseProgressionData>  $progressionSummary  keyed by exercise id, from {@see ProgressionSummaryService}
+     * @return Collection<string, DayExercise>
      */
-    public function planNextCycle(
-        AthleteProfile $profile,
-        Goal $goal,
-        ?string $hint,
-        Cycle $outgoing,
-        Collection $recommendations,
-        array $progressionSummary,
-    ): CyclePlanData {
-        $performed = $outgoing->cycleDays
+    public function performedSlots(Cycle $outgoing, array $progressionSummary): Collection
+    {
+        return $outgoing->cycleDays
             ->flatMap(fn (CycleDay $day) => $day->dayExercises->map(fn (DayExercise $slot): array => [$day, $slot]))
             ->filter(fn (array $pair): bool => ($progressionSummary[$pair[1]->exercise_id]->performed ?? false))
             ->mapWithKeys(fn (array $pair): array => [$this->slotKey($pair[0]->order, $pair[1]->order) => $pair[1]]);
-
-        if ($performed->isEmpty()) {
-            return $this->cloneOutgoing(
-                $outgoing,
-                'No exercise was trained last cycle; the prescription is unchanged.',
-                [],
-            );
-        }
-
-        $progressions = [];
-        $aiDays = 0;
-        $aiAvailable = true;
-        $daysWithSlots = $performed->groupBy(fn (DayExercise $slot, string $key): int => (int) explode('.', $key)[0], preserveKeys: true);
-
-        foreach ($daysWithSlots as $dayOrder => $daySlots) {
-            if ($aiAvailable) {
-                try {
-                    // Groq intermittently rejects the model's JSON (HTTP 400), so one more attempt is cheap insurance.
-                    $progressions += retry(2, fn (): array => $this->progressDay($profile, $goal, $hint, $outgoing, $daySlots, $recommendations, $progressionSummary));
-                    $aiDays++;
-
-                    continue;
-                } catch (CycleGenerationException $e) {
-                    // Stop asking a provider that just failed twice; the request has a 150 s budget.
-                    $aiAvailable = false;
-                    Log::warning('Cycle progression AI failed; falling back to session recommendations.', ['day' => $dayOrder, 'exception' => $e]);
-                }
-            }
-
-            $progressions += $this->progressionsFromRecommendations($daySlots, $recommendations);
-        }
-
-        return $this->cloneOutgoing(
-            $outgoing,
-            "Progressed {$aiDays} of {$daysWithSlots->count()} trained days with the AI; the rest used your session recommendations or kept last week's prescription.",
-            $progressions,
-        );
     }
 
     /**
-     * One AI call for the performed slots of a single day.
+     * The outgoing cycle's days and exercises, unchanged — the starting point
+     * of cycle N+1, which each day's job then progresses.
+     */
+    public function cloneDays(Cycle $outgoing): CyclePlanData
+    {
+        return $this->cloneOutgoing($outgoing, '', []);
+    }
+
+    /**
+     * One AI call for the performed slots of a single day. Throws
+     * {@see CycleGenerationException} on a provider error or an unusable answer.
      *
      * @param  Collection<string, DayExercise>  $daySlots  keyed by {@see self::slotKey()}
      * @param  Collection<int, ExerciseRecommendation>  $recommendations
      * @param  array<int, ExerciseProgressionData>  $progressionSummary
      * @return array<string, CyclePlanExerciseData> keyed by {@see self::slotKey()}
      */
-    private function progressDay(
+    public function progressDay(
         AthleteProfile $profile,
         Goal $goal,
         ?string $hint,
@@ -142,7 +111,7 @@ final class CyclePlannerService
      * @param  Collection<int, ExerciseRecommendation>  $recommendations
      * @return array<string, CyclePlanExerciseData> keyed by {@see self::slotKey()}
      */
-    private function progressionsFromRecommendations(Collection $performed, Collection $recommendations): array
+    public function progressionsFromRecommendations(Collection $performed, Collection $recommendations): array
     {
         $byExercise = $recommendations->keyBy('exercise_id');
 

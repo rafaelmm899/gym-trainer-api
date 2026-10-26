@@ -5,6 +5,7 @@ namespace App\Services\Cycle;
 use App\Actions\Routine\RoutineCreateAction;
 use App\Data\Cycle\CyclePlanData;
 use App\Data\Cycle\CyclePlanDayData;
+use App\Data\Cycle\CyclePlanExerciseData;
 use App\Enums\Cycle\CycleStatus;
 use App\Models\Cycle;
 use App\Models\CycleDay;
@@ -56,6 +57,34 @@ final class CycleDraftService
     {
         foreach ($plan->days as $index => $day) {
             $this->persistDay($cycle, $day, $index + 1);
+        }
+    }
+
+    /**
+     * Overwrites the prescription of a cloned day's exercises with the
+     * progressions keyed `"{day order}.{exercise order}"`; a slot without one
+     * keeps what it was cloned with.
+     *
+     * @param  array<string, CyclePlanExerciseData>  $progressions
+     */
+    public function applyProgressions(CycleDay $day, array $progressions): void
+    {
+        foreach ($day->loadMissing('dayExercises')->dayExercises as $slot) {
+            $progression = $progressions["{$day->order}.{$slot->order}"] ?? null;
+
+            if ($progression === null) {
+                continue;
+            }
+
+            $slot->update([
+                'sets' => $progression->sets,
+                'rep_min' => $progression->repMin,
+                'rep_max' => $progression->repMax,
+                'target_weight_kg' => $progression->targetWeightKg,
+                'target_rpe' => $progression->targetRpe,
+                'rest_seconds' => $progression->restSeconds,
+                'rationale' => $progression->rationale,
+            ]);
         }
     }
 

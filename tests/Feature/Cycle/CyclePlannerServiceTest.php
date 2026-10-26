@@ -149,8 +149,6 @@ it('builds the prompt from every profile field plus the routine goal and hint', 
     });
 });
 
-// keep-cycle-exercises-spec.md TC-16..TC-20, TC-24
-
 /**
  * The user's active cycle with every relation `planNextCycle()` reads loaded:
  * 5 days x 3 exercises.
@@ -192,75 +190,120 @@ function progressionSummaryFor(Cycle $cycle, array $unperformedExerciseIds = [])
         ->all();
 }
 
-function planNext(Cycle $cycle, array $summary, ?AthleteProfile $profile = null, ?Collection $recommendations = null): CyclePlanData
+// cycle N+1, one day at a time (async-cycle-generation-spec.md)
+
+/**
+ * The performed slots of one day of the cycle, keyed like the service does.
+ *
+ * @param  array<int, ExerciseProgressionData>  $summary
+ * @return Collection<string, DayExercise>
+ */
+function performedSlotsOfDay(Cycle $cycle, array $summary, int $dayOrder): Collection
 {
-    return app(CyclePlannerService::class)->planNextCycle(
+    return app(CyclePlannerService::class)->performedSlots($cycle, $summary)
+        ->filter(fn ($slot, string $key): bool => str_starts_with($key, "{$dayOrder}."));
+}
+
+/**
+ * @param  array<int, ExerciseProgressionData>  $summary
+ * @return array<string, CyclePlanExerciseData>
+ */
+function progressDayOf(Cycle $cycle, array $summary, int $dayOrder, ?Collection $recommendations = null, ?AthleteProfile $profile = null): array
+{
+    return app(CyclePlannerService::class)->progressDay(
         $profile ?? AthleteProfile::factory()->create(),
         Goal::Hypertrophy,
         'PPL',
         $cycle,
+        performedSlotsOfDay($cycle, $summary, $dayOrder),
         $recommendations ?? new Collection,
         $summary,
     );
 }
 
-/**
- * The AI-less plan: same layout, every slot as prescribed last cycle.
- */
-function expectCarriedOverPlan(CyclePlanData $plan, Cycle $cycle): void
-{
-    expect($plan->splitRationale)->toContain('Progressed 0 of 5 trained days')
-        ->and($plan->days)->toHaveCount(5);
+it('performedSlots() returns only the slots whose exercise was trained, keyed by day.exercise', function () {
+    $cycle = outgoingCycleForPlanning();
+    $unperformed = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
+
+    $slots = app(CyclePlannerService::class)->performedSlots($cycle, progressionSummaryFor($cycle, [$unperformed->exercise_id]));
+
+    expect($slots->keys()->all())->not->toContain('2.1')
+        ->and($slots->keys()->all())->toContain('1.1', '2.2', '5.3');
+});
+
+it('cloneDays() copies the outgoing days and exercises as prescribed', function () {
+    $cycle = outgoingCycleForPlanning();
+
+    $plan = app(CyclePlannerService::class)->cloneDays($cycle);
+
+    expect($plan->days)->toHaveCount(5);
 
     foreach ($cycle->cycleDays->sortBy('order')->values() as $index => $day) {
+        expect($plan->days[$index]->label)->toBe($day->label)
+            ->and($plan->days[$index]->exercises)->toHaveCount($day->dayExercises->count());
+
         foreach ($day->dayExercises->sortBy('order')->values() as $position => $slot) {
             expect($plan->days[$index]->exercises[$position])
                 ->exerciseId->toBe($slot->exercise_id)
                 ->sets->toBe($slot->sets)
                 ->repMin->toBe($slot->rep_min)
-                ->repMax->toBe($slot->rep_max);
-        }
-    }
-}
-
-// TC-16
-it('planNextCycle() keeps the outgoing structure and applies the AI progression', function () {
-    fakeCycleProgression();
-    $cycle = outgoingCycleForPlanning();
-
-    $plan = planNext($cycle, progressionSummaryFor($cycle));
-
-    expect($plan->days)->toHaveCount(5)
-        ->and($plan->splitRationale)->toContain('Progressed 5 of 5 trained days');
-
-    foreach ($cycle->cycleDays->sortBy('order')->values() as $index => $day) {
-        $planned = $plan->days[$index];
-
-        expect($planned->label)->toBe($day->label)
-            ->and($planned->focusMuscleGroups)->toBe($day->focus_muscle_groups)
-            ->and($planned->rationale)->toBe($day->rationale)
-            ->and($planned->exercises)->toHaveCount($day->dayExercises->count());
-
-        foreach ($day->dayExercises->sortBy('order')->values() as $position => $slot) {
-            expect($planned->exercises[$position])
-                ->exerciseId->toBe($slot->exercise_id)
-                ->name->toBe($slot->exercise->name)
-                ->sets->toBe(4)
-                ->repMin->toBe(8)
-                ->repMax->toBe(10)
-                ->targetWeightKg->toBe(45.0)
-                ->targetRpe->toBe(8.0)
-                ->restSeconds->toBe(120);
+                ->repMax->toBe($slot->rep_max)
+                ->targetWeightKg->toBe((float) $slot->target_weight_kg);
         }
     }
 });
 
+it('cloneDays() carries a null weight and RPE through', function () {
+    $cycle = outgoingCycleForPlanning();
+    $cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1)->update(['target_weight_kg' => null, 'target_rpe' => null]);
+    $cycle->load('cycleDays.dayExercises.exercise');
+
+    $plan = app(CyclePlannerService::class)->cloneDays($cycle);
+
+    expect($plan->days[0]->exercises[0])->targetWeightKg->toBeNull()->targetRpe->toBeNull();
+});
+
+// TC-16
+it('progressDay() maps the AI answer onto exactly the slots of that day', function () {
+    fakeCycleProgression();
+    $cycle = outgoingCycleForPlanning();
+
+    $progressions = progressDayOf($cycle, progressionSummaryFor($cycle), 2);
+
+    expect(array_keys($progressions))->toBe(['2.1', '2.2', '2.3']);
+
+    $slot = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
+
+    expect($progressions['2.1'])
+        ->exerciseId->toBe($slot->exercise_id)
+        ->name->toBe($slot->exercise->name)
+        ->sets->toBe(4)
+        ->repMin->toBe(8)
+        ->repMax->toBe(10)
+        ->targetWeightKg->toBe(45.0)
+        ->targetRpe->toBe(8.0)
+        ->restSeconds->toBe(120);
+});
+
+it('progressDay() prompts with only that day\'s slots', function () {
+    fakeCycleProgression();
+    $cycle = outgoingCycleForPlanning();
+
+    progressDayOf($cycle, progressionSummaryFor($cycle), 2);
+
+    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, '- day 2, exercise 1')
+        && str_contains($prompt->prompt, '- day 2, exercise 3')
+        && ! str_contains($prompt->prompt, '- day 1, exercise 1')
+        && ! str_contains($prompt->prompt, '- day 3, exercise 1'));
+});
+
 // TC-17
-it('planNextCycle() carries the prescription over when the progression response is malformed', function (array $slotOverrides, array $rootOverrides) {
+it('progressDay() rejects a malformed progression response', function (array $slotOverrides, array $rootOverrides) {
     fakeCycleProgression($slotOverrides, $rootOverrides);
     $cycle = outgoingCycleForPlanning();
 
-    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
+    expect(fn () => progressDayOf($cycle, progressionSummaryFor($cycle), 1))
+        ->toThrow(CycleGenerationException::class);
 })->with([
     'missing progressions list' => [[], ['progressions' => null]],
     'progression that is not an object' => [[], ['progressions' => ['nope']]],
@@ -275,11 +318,12 @@ it('planNextCycle() carries the prescription over when the progression response 
     'blank rationale' => [['1.1' => ['rationale' => ' ']], []],
 ]);
 
-it('planNextCycle() carries the prescription over when the response misses, adds or repeats a slot', function (Closure $mutate) {
+it('progressDay() rejects a response that misses, adds or repeats a slot', function (Closure $mutate) {
     CycleProgressionAgent::fake(fn (string $prompt): array => $mutate(cycleProgressionPayload($prompt)));
     $cycle = outgoingCycleForPlanning();
 
-    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
+    expect(fn () => progressDayOf($cycle, progressionSummaryFor($cycle), 1))
+        ->toThrow(CycleGenerationException::class);
 })->with([
     'missing slot' => [function (array $payload): array {
         array_pop($payload['progressions']);
@@ -291,8 +335,8 @@ it('planNextCycle() carries the prescription over when the response misses, adds
 
         return $payload;
     }],
-    'unknown day' => [function (array $payload): array {
-        $payload['progressions'][] = [...$payload['progressions'][0], 'day' => 6];
+    'a slot of another day' => [function (array $payload): array {
+        $payload['progressions'][] = [...$payload['progressions'][0], 'day' => 2];
 
         return $payload;
     }],
@@ -303,73 +347,28 @@ it('planNextCycle() carries the prescription over when the response misses, adds
     }],
 ]);
 
-// TC-18
-it('planNextCycle() copies an unperformed exercise verbatim and never sends it to the AI', function () {
-    fakeCycleProgression();
-    $cycle = outgoingCycleForPlanning();
-    $unperformed = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
-
-    $plan = planNext($cycle, progressionSummaryFor($cycle, [$unperformed->exercise_id]));
-
-    expect($plan->days[1]->exercises[0])
-        ->exerciseId->toBe($unperformed->exercise_id)
-        ->sets->toBe($unperformed->sets)
-        ->repMin->toBe($unperformed->rep_min)
-        ->repMax->toBe($unperformed->rep_max)
-        ->targetWeightKg->toBe((float) $unperformed->target_weight_kg)
-        ->targetRpe->toBe((float) $unperformed->target_rpe)
-        ->restSeconds->toBe($unperformed->rest_seconds)
-        ->rationale->toBe($unperformed->rationale);
-
-    expect($plan->days[1]->exercises[1]->sets)->toBe(4);
-
-    CycleProgressionAgent::assertPrompted(fn ($prompt): bool => ! str_contains($prompt->prompt, $unperformed->exercise->name));
-});
-
-it('planNextCycle() clones the whole cycle without calling the AI when nothing was performed', function () {
-    fakeCycleProgression();
-    $cycle = outgoingCycleForPlanning();
-    $summary = progressionSummaryFor($cycle, $cycle->cycleDays->flatMap(fn ($day) => $day->dayExercises)->pluck('exercise_id')->all());
-
-    $plan = planNext($cycle, $summary);
-
-    CycleProgressionAgent::assertNeverPrompted();
-
-    expect($plan->days)->toHaveCount(5)
-        ->and($plan->splitRationale)->not->toBe('')
-        ->and($plan->days[0]->exercises[0]->sets)->toBe($cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1)->sets);
-});
-
 // TC-19
-it('planNextCycle() carries the prescription over when the provider keeps failing', function () {
+it('progressDay() wraps a provider exception in CycleGenerationException', function () {
     CycleProgressionAgent::fake(fn () => throw new RuntimeException('boom'));
     $cycle = outgoingCycleForPlanning();
 
-    expectCarriedOverPlan(planNext($cycle, progressionSummaryFor($cycle)), $cycle);
+    $thrown = null;
+
+    try {
+        progressDayOf($cycle, progressionSummaryFor($cycle), 1);
+    } catch (CycleGenerationException $e) {
+        $thrown = $e;
+    }
+
+    expect($thrown)->toBeInstanceOf(CycleGenerationException::class)
+        ->and($thrown->getPrevious()->getMessage())->toBe('boom');
 });
 
-it('planNextCycle() retries the progression agent once before falling back', function () {
-    $calls = 0;
-    CycleProgressionAgent::fake(function (string $prompt) use (&$calls): array {
-        if (++$calls === 1) {
-            throw new RuntimeException('Failed to validate JSON');
-        }
-
-        return cycleProgressionPayload($prompt);
-    });
+it('progressionsFromRecommendations() applies the active recommendation and copies the rest', function () {
     $cycle = outgoingCycleForPlanning();
-
-    $plan = planNext($cycle, progressionSummaryFor($cycle));
-
-    expect($calls)->toBe(6)
-        ->and($plan->splitRationale)->toContain('Progressed 5 of 5 trained days')
-        ->and($plan->days[0]->exercises[0]->sets)->toBe(4);
-});
-
-it('planNextCycle() applies the active recommendation of a performed exercise when falling back', function () {
-    CycleProgressionAgent::fake(fn () => throw new RuntimeException('boom'));
-    $cycle = outgoingCycleForPlanning();
+    $summary = progressionSummaryFor($cycle);
     $slot = $cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1);
+    $other = $cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 2);
     $recommendation = ExerciseRecommendation::factory()->for($slot->exercise)->create([
         'target_weight_kg' => 62.5,
         'target_sets' => 5,
@@ -378,90 +377,27 @@ it('planNextCycle() applies the active recommendation of a performed exercise wh
         'explanation' => 'Beat the target twice in a row.',
     ]);
 
-    $plan = planNext($cycle, progressionSummaryFor($cycle), recommendations: collect([$recommendation]));
+    $progressions = app(CyclePlannerService::class)->progressionsFromRecommendations(
+        performedSlotsOfDay($cycle, $summary, 1),
+        collect([$recommendation]),
+    );
 
-    expect($plan->days[0]->exercises[0])
+    expect($progressions['1.1'])
         ->exerciseId->toBe($slot->exercise_id)
         ->sets->toBe(5)
         ->repMin->toBe(6)
         ->repMax->toBe(8)
         ->targetWeightKg->toBe(62.5)
         ->rationale->toBe('Beat the target twice in a row.')
-        ->restSeconds->toBe($slot->rest_seconds);
-});
-
-it('planNextCycle() asks the progression agent once per trained day with only that day\'s slots', function () {
-    $prompts = [];
-    CycleProgressionAgent::fake(function (string $prompt) use (&$prompts): array {
-        $prompts[] = $prompt;
-
-        return cycleProgressionPayload($prompt);
-    });
-    $cycle = outgoingCycleForPlanning();
-    $day2Names = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->pluck('exercise.name');
-
-    planNext($cycle, progressionSummaryFor($cycle));
-
-    $day2Prompt = collect($prompts)->first(fn (string $prompt): bool => str_contains($prompt, '- day 2, exercise 1'));
-
-    expect($prompts)->toHaveCount(5)
-        ->and($day2Prompt)->not->toContain('- day 1, exercise 1')
-        ->and($day2Names->every(fn (string $name): bool => str_contains($day2Prompt, $name)))->toBeTrue();
-});
-
-it('planNextCycle() only degrades the day whose response is malformed', function () {
-    $cycle = outgoingCycleForPlanning();
-    $slot = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
-    CycleProgressionAgent::fake(function (string $prompt): array {
-        $payload = cycleProgressionPayload($prompt);
-
-        if (str_contains($prompt, '- day 2, exercise 1')) {
-            array_pop($payload['progressions']);
-        }
-
-        return $payload;
-    });
-
-    $plan = planNext($cycle, progressionSummaryFor($cycle));
-
-    expect($plan->days[0]->exercises[0]->sets)->toBe(4)
-        ->and($plan->days[1]->exercises[0]->sets)->toBe($slot->sets)
-        ->and($plan->splitRationale)->toContain('Progressed 1 of 5 trained days');
-});
-
-it('planNextCycle() stops asking the AI after a day failed twice', function () {
-    $calls = 0;
-    CycleProgressionAgent::fake(function () use (&$calls): never {
-        $calls++;
-
-        throw new RuntimeException('boom');
-    });
-    $cycle = outgoingCycleForPlanning();
-
-    planNext($cycle, progressionSummaryFor($cycle));
-
-    expect($calls)->toBe(2);
+        ->restSeconds->toBe($slot->rest_seconds)
+        ->and($progressions['1.2'])
+        ->sets->toBe($other->sets)
+        ->targetWeightKg->toBe((float) $other->target_weight_kg);
 });
 
 // TC-20
 it('keeps the first-cycle agent free of continuation wording', function () {
     expect((new CyclePlannerAgent)->instructions())->not->toContain('continuation');
-});
-
-// TC-24
-it('planNextCycle() carries a null weight and RPE through on the cloned slots', function () {
-    fakeCycleProgression();
-    $cycle = outgoingCycleForPlanning();
-    $unperformed = $cycle->cycleDays->firstWhere('order', 1)->dayExercises->firstWhere('order', 1);
-    $performed = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
-    $unperformed->update(['target_weight_kg' => null, 'target_rpe' => null]);
-    $performed->update(['target_weight_kg' => null]);
-    $cycle->load('cycleDays.dayExercises.exercise');
-
-    $plan = planNext($cycle, progressionSummaryFor($cycle, [$unperformed->exercise_id]));
-
-    expect($plan->days[0]->exercises[0])->targetWeightKg->toBeNull()->targetRpe->toBeNull()
-        ->and($plan->days[1]->exercises[0]->targetWeightKg)->toBe(45.0);
 });
 
 // TC-5, TC-6 (prompt content)
@@ -475,11 +411,12 @@ it('lists each performed slot with its prescription, actuals and active recommen
     ]);
     $profile = AthleteProfile::factory()->create(['notes' => 'Distinctive profile notes.']);
 
-    app(CyclePlannerService::class)->planNextCycle(
+    app(CyclePlannerService::class)->progressDay(
         $profile,
         Goal::Strength,
         'Distinctive hint.',
         $cycle,
+        performedSlotsOfDay($cycle, progressionSummaryFor($cycle), 1),
         new Collection([$recommendation->load('exercise')]),
         progressionSummaryFor($cycle),
     );
