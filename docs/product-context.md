@@ -28,7 +28,7 @@ generación del ciclo de la semana siguiente.
 - **Ciclo** — una **semana** de esa rutina. Tiene `sequence_number` (1, 2, 3…) y
   estado: `active` (semana en curso), `completed` (se entrenaron sus 5 días y
   llegó el siguiente), `incomplete` (llegó el siguiente sin terminarla),
-  `generating` / `failed` (reservados, sin uso: el ciclo N+1 se genera síncrono).
+  `generating` / `failed` (el ciclo N+1 mientras se genera de forma asíncrona, o si falló).
   `draft` queda reservado, sin uso en el MVP. Por ahora **5 días por ciclo**; a futuro configurable.
 - **Día del ciclo** — `order` 1..N dentro del ciclo, con `label` (ej. "Pecho") y
   grupos musculares foco. No está atado a un día de la semana concreto; el usuario
@@ -207,7 +207,7 @@ lo periférico (edición de rutina, históricos, progreso) queda para después.
 | IA | `laravel/ai ^0.6.8`, agentes `HasStructuredOutput` + `Promptable` |
 | Providers IA | `anthropic` y `openai`, default por env |
 | Auth | Laravel Sanctum (modo SPA: cookie + CSRF) |
-| Async | Job encolado solo para el análisis de sesión (`database` queue en dev). El **primer ciclo** (`POST /routines`) y el **ciclo N+1** (`POST /routines/{routine}/cycles`) se generan **síncronos** en el request. |
+| Async | Job encolado solo para el análisis de sesión (`database` queue en dev). El **primer ciclo** (`POST /routines`) se genera **síncrono** en el request. El **ciclo N+1** (`POST /routines/{routine}/cycles`) es **asíncrono**: responde 202 y un Job por día lo va completando (ver `docs/plans/async-cycle-generation-spec.md`). |
 | DB | PostgreSQL 17 (código agnóstico vía Eloquent; MySQL sigue siendo compatible) |
 | Tests | Pest — feature por endpoint, unit para servicios, agentes con respuesta *fake* (sin llamadas reales a la IA) |
 | Estilo | Laravel Pint |
