@@ -9,6 +9,8 @@ set -euo pipefail
 # job started every couple of minutes, so its next execution already runs the
 # new image; one that is in flight finishes on the old code within its 120 s cap.
 # Run it through `make deploy`; every setting below can be overridden by env.
+# SPA_ONLY=1 ships just a new SPA build: the image is rebuilt and the web
+# service redeployed, but the jobs are left alone and no migrations run.
 
 PROJECT="${GCP_PROJECT:-gym-trainer-api}"
 REGION="${GCP_REGION:-southamerica-east1}"
@@ -46,14 +48,16 @@ digest="$(gcloud artifacts docker images describe "$IMAGE:latest" --project "$PR
     --format='value(image_summary.fully_qualified_digest)')"
 [[ -n "$digest" ]] || die "could not resolve the pushed image digest"
 
-echo "==> Updating the jobs to $digest"
-for job in "${JOBS[@]}"; do
-    gcloud run jobs update "$job" --project "$PROJECT" --region "$REGION" --image "$digest"
-done
+if [[ "${SPA_ONLY:-0}" != 1 ]]; then
+    echo "==> Updating the jobs to $digest"
+    for job in "${JOBS[@]}"; do
+        gcloud run jobs update "$job" --project "$PROJECT" --region "$REGION" --image "$digest"
+    done
 
-echo "==> Running migrations"
-gcloud run jobs execute "${JOBS[0]}" --project "$PROJECT" --region "$REGION" --wait \
-    --args=artisan,migrate,--force
+    echo "==> Running migrations"
+    gcloud run jobs execute "${JOBS[0]}" --project "$PROJECT" --region "$REGION" --wait \
+        --args=artisan,migrate,--force
+fi
 
 echo "==> Deploying the web service"
 gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$digest"
