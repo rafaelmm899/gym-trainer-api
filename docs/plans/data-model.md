@@ -60,7 +60,7 @@ Así la API no filtra el orden de creación ni el volumen de filas.
 | 3 | Reps (prescripción y recomendación) | Rango `rep_min` / `rep_max` |
 | 4 | Historial de recomendaciones | Sin `status`: una sola fila por `(user, routine, exercise)`, se actualiza (upsert) en cada análisis — decisión revisada en `session-analysis-spec.md` §9, ver nota en `exercise_recommendations` |
 | 5 | Dedupe de ejercicios | Solo log; sin tabla `exercise_aliases` en v1 |
-| 6 | Prescrito vs. real | Se deriva por `training_sessions.cycle_day_id`; sin FK extra en `set_logs` |
+| 6 | Prescrito vs. real | Se deriva por `training_sessions.cycle_day_id`; además `set_logs.day_exercise_id` (nullable) guarda la prescripción contra la que se registró cada serie (ver `session-redesign-data-spec.md`) |
 
 ## Diagrama ER
 
@@ -275,6 +275,7 @@ que consume la IA se calculan a partir de estas filas.
 | `uuid` | `uuid`, **unique** | Identificador público (route-model binding para editar/borrar la serie + campo `id` del Resource). |
 | `session_id` | `bigint` FK → `training_sessions` | Sesión a la que pertenece la serie. |
 | `exercise_id` | `bigint` FK → `exercises` | Ejercicio de la serie. Va directo (no vía `day_exercises`) para que las sesiones libres, sin prescripción, también registren. |
+| `day_exercise_id` | `bigint` FK → `day_exercises` null, `nullOnDelete` | Prescripción contra la que se registró la serie. Null en sesiones libres, en series fuera de plan (registradas con `exercise_id`) y en filas históricas que el backfill no pudo asignar sin ambigüedad. |
 | `set_number` | `smallint` | Número de serie dentro del ejercicio en esa sesión: 1, 2, 3… |
 | `weight_kg` | `decimal(6,2)` | Peso levantado. |
 | `reps` | `smallint` | Repeticiones completadas. |
@@ -282,8 +283,9 @@ que consume la IA se calculan a partir de estas filas.
 | `note` | `text` null | Nota libre del usuario sobre esa serie. |
 
 **Reglas**
-- Prescrito vs. real: se obtiene uniendo `set_logs` → `training_sessions.cycle_day_id` →
-  `day_exercises` por `exercise_id`. Sin columna puente.
+- Prescrito vs. real: `day_exercise_id` lo fija el cliente al registrar la serie contra una
+  prescripción (nunca se infiere ni cambia al editar). Para filas sin él se puede unir
+  `set_logs` → `training_sessions.cycle_day_id` → `day_exercises` por `exercise_id`.
 - `set_number` lo envía el cliente y se valida contiguo por `(session, exercise)`
   (la serie N solo se acepta si ya existen N−1 series de ese ejercicio en la
   sesión). Único `(session_id, exercise_id, set_number)`.

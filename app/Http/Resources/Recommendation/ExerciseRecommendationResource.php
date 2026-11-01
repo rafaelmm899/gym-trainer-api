@@ -27,13 +27,13 @@ class ExerciseRecommendationResource extends JsonResource
             'target_rep_max' => $this->target_rep_max,
             'action' => $this->action->value,
             'explanation' => $this->explanation,
-            'history' => array_map(fn (ExercisePerformanceData $point): array => [
+            'history' => collect($this->history)->map(fn (ExercisePerformanceData $point): array => [
                 'session_id' => $point->sessionId,
                 'started_at' => $point->startedAt->toIso8601String(),
                 'top_weight_kg' => $point->topWeightKg,
                 'top_set_reps' => $point->topSetReps,
                 'volume_kg' => $point->volumeKg,
-            ], $this->history),
+            ])->values()->all(),
         ];
     }
 }

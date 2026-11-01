@@ -5,7 +5,6 @@ namespace App\Http\Resources\Cycle;
 use App\Models\DayExercise;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Arr;
 
 /**
  * @mixin DayExercise
@@ -32,10 +31,12 @@ class DayExerciseResource extends JsonResource
                 'session_id' => $this->previous->sessionId,
                 'started_at' => $this->previous->startedAt->toIso8601String(),
                 'cycle_sequence_number' => $this->previous->cycleSequenceNumber,
-                'sets' => array_map(
-                    fn (array $set): array => Arr::only($set, ['set_number', 'weight_kg', 'reps', 'rpe']),
-                    $this->previous->sets,
-                ),
+                'sets' => collect($this->previous->sets)->map(fn (array $set): array => [
+                    'set_number' => $set['set_number'],
+                    'weight_kg' => $set['weight_kg'],
+                    'reps' => $set['reps'],
+                    'rpe' => $set['rpe'],
+                ])->values()->all(),
             ]),
         ];
     }
