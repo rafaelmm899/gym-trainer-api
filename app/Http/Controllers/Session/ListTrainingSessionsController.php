@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Session;
 
+use App\Actions\Session\TrainingSessionListAction;
 use App\Enums\Session\SessionStatus;
 use App\Http\Requests\Session\ListTrainingSessionsRequest;
 use App\Http\Resources\Session\TrainingSessionResource;
@@ -10,23 +11,16 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 final class ListTrainingSessionsController
 {
-    public function __invoke(ListTrainingSessionsRequest $request, Routine $routine): AnonymousResourceCollection
-    {
-        $sessions = $routine->trainingSessions()
-            ->with('cycleDay.cycle')
-            ->when(
-                $request->input('cycle_day'),
-                fn ($query, string $cycleDay) => $query->whereHas('cycleDay', fn ($day) => $day->where('uuid', $cycleDay)),
-            )
-            ->when(
-                $request->enum('status', SessionStatus::class),
-                fn ($query, SessionStatus $status) => $query->where('status', $status),
-            )
-            ->orderByDesc('started_at')
-            ->orderByDesc('id')
-            ->paginate($request->integer('per_page', 15))
-            ->withQueryString();
-
-        return TrainingSessionResource::collection($sessions);
+    public function __invoke(
+        ListTrainingSessionsRequest $request,
+        Routine $routine,
+        TrainingSessionListAction $action,
+    ): AnonymousResourceCollection {
+        return TrainingSessionResource::collection($action->handle(
+            $routine,
+            $request->input('cycle_day'),
+            $request->enum('status', SessionStatus::class),
+            $request->integer('per_page', 15),
+        ));
     }
 }

@@ -169,7 +169,7 @@ it('has the expected session structure and formats', function () {
 
     $data = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk()->json('data');
 
-    expect(array_keys($data))->toEqualCanonicalizing(['id', 'status', 'analysis_state', 'note', 'perceived_effort', 'started_at', 'completed_at', 'created_at', 'updated_at', 'cycle_day', 'sets', 'recommendations'])
+    expect(array_keys($data))->toEqualCanonicalizing(['id', 'status', 'analysis_state', 'note', 'perceived_effort', 'started_at', 'completed_at', 'created_at', 'updated_at', 'cycle_day', 'summary', 'sets', 'recommendations'])
         ->and($data['id'])->toMatch(uuidV4Pattern())
         ->and($data['started_at'])->toMatch(iso8601Pattern())
         ->and($data['completed_at'])->toMatch(iso8601Pattern());

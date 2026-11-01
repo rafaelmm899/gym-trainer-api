@@ -13,7 +13,7 @@ use stdClass;
 
 /**
  * Counts, volume, duration and volume change of whole pages of sessions, in a
- * fixed number of queries however many sessions there are.
+ * fixed number of queries (no early exits) however many sessions there are.
  *
  * `volume_change_pct` compares a completed planned session with the most
  * recent completed session of the same routine on the same plan day (same
@@ -69,10 +69,6 @@ final class SessionSummaryService
     {
         $comparable = $sessions->filter(fn (TrainingSession $session): bool => $this->comparesToBaseline($session));
 
-        if ($comparable->isEmpty()) {
-            return collect();
-        }
-
         return DB::table('training_sessions as t')
             ->join('cycle_days as d', 'd.id', '=', 't.cycle_day_id')
             ->join('cycles as c', 'c.id', '=', 'd.cycle_id')
@@ -109,10 +105,6 @@ final class SessionSummaryService
      */
     private function volumes(array $sessionIds): Collection
     {
-        if ($sessionIds === []) {
-            return collect();
-        }
-
         return SetLog::query()
             ->whereIn('session_id', $sessionIds)
             ->get(['session_id', 'weight_kg', 'reps'])
