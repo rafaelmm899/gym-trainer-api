@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\RegisterController;
 use App\Http\Controllers\Cycle\ExportCycleDayController;
 use App\Http\Controllers\Cycle\GenerateCycleController;
 use App\Http\Controllers\Cycle\ImportCycleDayController;
+use App\Http\Controllers\Exercise\ListExerciseHistoryController;
 use App\Http\Controllers\Exercise\ListExercisesController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
@@ -103,6 +104,13 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     // Exercise catalogue: global, read-only, owned by no one — no Policy.
     Route::get('exercises', ListExercisesController::class)->name('exercises.list');
+
+    // One exercise's completed sessions of the authenticated user, newest first.
+    // No Policy: the exercise is global; the Service scopes everything to the
+    // caller's own sessions.
+    Route::get('exercises/{exercise}/history', ListExerciseHistoryController::class)
+        ->whereUuid('exercise')
+        ->name('exercises.history');
 
     // One session in full: prescription, sets and recommendations. The Form
     // Request delegates authorization to TrainingSessionPolicy::view.
