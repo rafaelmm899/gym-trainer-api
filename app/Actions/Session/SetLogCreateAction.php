@@ -20,7 +20,7 @@ final class SetLogCreateAction
         $this->ensureSessionOpen($session);
 
         $dayExercise = $this->resolveDayExercise($session, $data);
-        $exercise = $dayExercise?->exercise ?? $this->resolveExercise($data);
+        $exercise = $dayExercise->exercise ?? $this->resolveExercise($data);
 
         $this->ensureSetNumberIsNext($session, $exercise, $data->set_number);
 
