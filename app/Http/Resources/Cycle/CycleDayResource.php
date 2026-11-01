@@ -22,6 +22,7 @@ class CycleDayResource extends JsonResource
             'label' => $this->label,
             'focus_muscle_groups' => $this->focus_muscle_groups,
             'rationale' => $this->rationale,
+            'progression_state' => $this->progression_state->value,
             'cycle' => $this->whenLoaded('cycle', fn (): array => [
                 'id' => $this->cycle->uuid,
                 'sequence_number' => $this->cycle->sequence_number,

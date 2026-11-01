@@ -27,7 +27,7 @@ use Laravel\Ai\Promptable;
  * `rationale` to one sentence. Same strict-mode schema constraints as
  * {@see CyclePlannerAgent::schema()}.
  */
-#[Timeout(60)]
+#[Timeout(30)]
 #[MaxTokens(2500)]
 final class CycleProgressionAgent implements Agent, HasStructuredOutput
 {

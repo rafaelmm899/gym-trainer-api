@@ -324,3 +324,19 @@ it('keeps a free session without a cycle day when opening it', function () {
         ->assertCreated()
         ->assertJsonPath('data.cycle_day', null);
 });
+
+// async-cycle-generation-spec.md TC-40
+it('opens a session on the active cycle while the next cycle is generating, and rejects its days', function () {
+    $routine = trainingRoutineWithCycle($this->user);
+    $activeDay = $routine->cycle->cycleDays->first();
+    $generating = Cycle::factory()->generating()->for($routine)->create(['sequence_number' => $routine->cycle->sequence_number + 1]);
+    $generatingDay = CycleDay::factory()->for($generating)->create(['order' => 1]);
+
+    $this->actingAs($this->user)->postJson(sessionsUrl($routine), ['day' => $generatingDay->uuid])
+        ->assertStatus(409)
+        ->assertJsonPath('data.code', 'CYCLE_DAY_NOT_IN_ACTIVE_CYCLE');
+
+    $this->actingAs($this->user)->postJson(sessionsUrl($routine), ['day' => $activeDay->uuid])
+        ->assertCreated()
+        ->assertJsonPath('data.cycle_day.id', $activeDay->uuid);
+});

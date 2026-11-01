@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\Cycle\DayProgressionState;
 use App\Models\Concerns\HasPublicUuid;
 use Carbon\CarbonImmutable;
 use Database\Factories\CycleDayFactory;
@@ -23,6 +24,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $label
  * @property list<string> $focus_muscle_groups
  * @property string $rationale
+ * @property DayProgressionState $progression_state
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Cycle $cycle
@@ -39,13 +41,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereLabel($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereOrder($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereProgressionState($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereRationale($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereUpdatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|CycleDay whereUuid($value)
  *
  * @mixin \Eloquent
  */
-#[Fillable(['order', 'label', 'focus_muscle_groups', 'rationale'])]
+#[Fillable(['order', 'label', 'focus_muscle_groups', 'rationale', 'progression_state'])]
 class CycleDay extends Model
 {
     /** @use HasFactory<CycleDayFactory> */
@@ -58,6 +61,7 @@ class CycleDay extends Model
     {
         return [
             'focus_muscle_groups' => 'array',
+            'progression_state' => DayProgressionState::class,
         ];
     }
 

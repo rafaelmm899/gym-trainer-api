@@ -259,7 +259,7 @@ it('shapes the embedded cycle day with its cycle', function () {
         ->assertJsonMissingPath('data.0.cycle_day.exercises');
 
     expect(array_keys($response->json('data.0.cycle_day')))
-        ->toEqualCanonicalizing(['id', 'order', 'label', 'focus_muscle_groups', 'rationale', 'cycle'])
+        ->toEqualCanonicalizing(['id', 'order', 'label', 'focus_muscle_groups', 'rationale', 'progression_state', 'cycle'])
         ->and(array_keys($response->json('data.0.cycle_day.cycle')))->toEqualCanonicalizing(['id', 'sequence_number'])
         ->and($response->json('data.0.cycle_day.cycle.sequence_number'))->toBeInt();
 });

@@ -14,6 +14,6 @@ final class GenerateCycleController
     {
         $cycle = $action->handle($routine);
 
-        return CycleResource::make($cycle)->response()->setStatusCode(Response::HTTP_CREATED);
+        return CycleResource::make($cycle)->response()->setStatusCode(Response::HTTP_ACCEPTED);
     }
 }
