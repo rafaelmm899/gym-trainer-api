@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $uuid
  * @property int $session_id
  * @property int $exercise_id
+ * @property int|null $day_exercise_id
  * @property int $set_number
  * @property string $weight_kg
  * @property int $reps
@@ -29,12 +30,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $updated_at
  * @property-read TrainingSession $session
  * @property-read Exercise $exercise
+ * @property-read DayExercise|null $dayExercise
  *
  * @method static \Database\Factories\SetLogFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog query()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog whereDayExerciseId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog whereExerciseId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SetLog whereNote($value)
@@ -48,7 +51,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * @mixin \Eloquent
  */
-#[Fillable(['session_id', 'exercise_id', 'set_number', 'weight_kg', 'reps', 'rpe', 'note'])]
+#[Fillable(['session_id', 'exercise_id', 'day_exercise_id', 'set_number', 'weight_kg', 'reps', 'rpe', 'note'])]
 class SetLog extends Model
 {
     /** @use HasFactory<SetLogFactory> */
@@ -81,5 +84,16 @@ class SetLog extends Model
     public function exercise(): BelongsTo
     {
         return $this->belongsTo(Exercise::class);
+    }
+
+    /**
+     * The prescription this set was logged against. `null` for free sessions,
+     * off-plan sets and rows the backfill could not assign unambiguously.
+     *
+     * @return BelongsTo<DayExercise, $this>
+     */
+    public function dayExercise(): BelongsTo
+    {
+        return $this->belongsTo(DayExercise::class);
     }
 }

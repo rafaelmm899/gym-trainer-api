@@ -16,6 +16,7 @@ final class ShowTrainingSessionController
             'cycleDay.dayExercises.exercise',
             'sets' => fn (HasMany $sets) => $sets->orderBy('exercise_id')->orderBy('set_number'),
             'sets.exercise',
+            'sets.dayExercise',
             'recommendations' => fn (HasMany $recommendations) => $recommendations->orderBy('id'),
             'recommendations.exercise',
         ]);

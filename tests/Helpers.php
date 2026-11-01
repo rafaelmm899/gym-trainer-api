@@ -8,9 +8,12 @@ use App\Models\CycleDay;
 use App\Models\DayExercise;
 use App\Models\Exercise;
 use App\Models\Routine;
+use App\Models\SetLog;
 use App\Models\TrainingSession;
 use App\Models\User;
+use Carbon\CarbonInterface;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -317,4 +320,53 @@ function buildXlsxUploadedFile(array $rows, string $filename = 'import.xlsx'): U
 function buildUnreadableXlsxUploadedFile(string $filename = 'corrupt.xlsx'): UploadedFile
 {
     return UploadedFile::fake()->create($filename, 5);
+}
+
+/**
+ * Number of SQL queries `$callback` runs.
+ */
+function countQueries(Closure $callback): int
+{
+    $count = 0;
+    DB::listen(function () use (&$count): void {
+        $count++;
+    });
+
+    $callback();
+
+    return $count;
+}
+
+/**
+ * A completed session of `$user` under `$routine` with the given sets of
+ * `$exercise` (`[[weight_kg, reps], ...]`, numbered from 1, no RPE, no note).
+ * `$day` makes it a planned session; without it the session is free.
+ *
+ * @param  list<array{0: float|int, 1: int}>  $sets
+ */
+function completedSessionWith(
+    User $user,
+    Routine $routine,
+    Exercise $exercise,
+    array $sets,
+    CarbonInterface $startedAt,
+    ?CycleDay $day = null,
+): TrainingSession {
+    $session = TrainingSession::factory()->for($user)->for($routine)->completed()->create([
+        'cycle_day_id' => $day?->id,
+        'started_at' => $startedAt,
+        'completed_at' => $startedAt->addHour(),
+    ]);
+
+    foreach ($sets as $index => [$weight, $reps]) {
+        SetLog::factory()->for($session, 'session')->for($exercise)->create([
+            'set_number' => $index + 1,
+            'weight_kg' => $weight,
+            'reps' => $reps,
+            'rpe' => null,
+            'note' => null,
+        ]);
+    }
+
+    return $session;
 }

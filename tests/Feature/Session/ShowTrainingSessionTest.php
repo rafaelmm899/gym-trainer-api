@@ -102,7 +102,7 @@ it('gives each set its exercise and formatted numbers', function () {
     $response = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk();
 
     $set = $response->json('data.sets.0');
-    expect(array_keys($set))->toEqualCanonicalizing(['id', 'exercise', 'set_number', 'weight_kg', 'reps', 'rpe', 'note', 'created_at', 'updated_at'])
+    expect(array_keys($set))->toEqualCanonicalizing(['id', 'exercise', 'day_exercise_id', 'set_number', 'weight_kg', 'reps', 'rpe', 'note', 'created_at', 'updated_at'])
         ->and($set['id'])->toMatch(uuidV4Pattern())
         ->and($set['exercise'])->toBeArray()->toHaveKey('name')
         ->and($set['weight_kg'])->toBe(82.5)

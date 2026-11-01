@@ -22,7 +22,7 @@ final class SetLogUpdateAction
             'note' => $data->note,
         ]));
 
-        return $set->load('exercise');
+        return $set->load(['exercise', 'dayExercise']);
     }
 
     private function ensureSessionOpen(TrainingSession $session): void
