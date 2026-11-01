@@ -2,25 +2,22 @@
 
 namespace App\Http\Controllers\Session;
 
+use App\Actions\Session\TrainingSessionShowAction;
 use App\Http\Requests\Session\ShowTrainingSessionRequest;
 use App\Http\Resources\Session\TrainingSessionResource;
 use App\Models\TrainingSession;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\User;
 
 final class ShowTrainingSessionController
 {
-    public function __invoke(ShowTrainingSessionRequest $request, TrainingSession $session): TrainingSessionResource
-    {
-        $session->load([
-            'cycleDay.cycle',
-            'cycleDay.dayExercises.exercise',
-            'sets' => fn (HasMany $sets) => $sets->orderBy('exercise_id')->orderBy('set_number'),
-            'sets.exercise',
-            'sets.dayExercise',
-            'recommendations' => fn (HasMany $recommendations) => $recommendations->orderBy('id'),
-            'recommendations.exercise',
-        ]);
+    public function __invoke(
+        ShowTrainingSessionRequest $request,
+        TrainingSession $session,
+        TrainingSessionShowAction $action,
+    ): TrainingSessionResource {
+        /** @var User $user */
+        $user = $request->user();
 
-        return TrainingSessionResource::make($session);
+        return TrainingSessionResource::make($action->handle($user, $session));
     }
 }

@@ -54,6 +54,26 @@ final class ExerciseHistoryService
     }
 
     /**
+     * Sets `previous` (an `ExercisePerformanceData` or `null`) as a relation on
+     * every prescribed exercise of the session's planned day. The day's
+     * `dayExercises` must already be loaded; a free session has none.
+     */
+    public function attachPrevious(User $user, TrainingSession $session): void
+    {
+        if ($session->cycleDay === null) {
+            return;
+        }
+
+        $dayExercises = $session->cycleDay->dayExercises;
+
+        $previous = $this->previousFor($user, $session->started_at, $dayExercises->pluck('exercise_id')->unique()->all());
+
+        foreach ($dayExercises as $dayExercise) {
+            $dayExercise->setRelation('previous', $previous->get($dayExercise->exercise_id));
+        }
+    }
+
+    /**
      * One page of the user's completed sessions of `$exercise`, newest first.
      * `volume_change_pct` compares each item with the session immediately
      * before it for the exercise — across routines and free sessions, and
