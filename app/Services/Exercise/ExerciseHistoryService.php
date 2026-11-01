@@ -74,6 +74,20 @@ final class ExerciseHistoryService
     }
 
     /**
+     * Sets `history` (see `trendFor`) as a relation on each recommendation.
+     *
+     * @param  EloquentCollection<int, ExerciseRecommendation>  $recommendations
+     */
+    public function attachTrend(User $user, EloquentCollection $recommendations): void
+    {
+        $trend = $this->trendFor($user, $recommendations);
+
+        foreach ($recommendations as $recommendation) {
+            $recommendation->setRelation('history', $trend->get($recommendation->id));
+        }
+    }
+
+    /**
      * One page of the user's completed sessions of `$exercise`, newest first.
      * `volume_change_pct` compares each item with the session immediately
      * before it for the exercise — across routines and free sessions, and

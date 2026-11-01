@@ -142,7 +142,7 @@ it('gives each recommendation the expected structure', function () {
 
     $item = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk()->json('data.recommendations.0');
 
-    expect(array_keys($item))->toEqualCanonicalizing(['id', 'exercise', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation'])
+    expect(array_keys($item))->toEqualCanonicalizing(['id', 'exercise', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation', 'history'])
         ->and($item['id'])->toMatch(uuidV4Pattern())
         ->and($item['exercise'])->toBeArray()
         ->and($item['action'])->toBeString();

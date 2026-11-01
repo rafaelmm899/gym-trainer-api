@@ -29,6 +29,7 @@ final class TrainingSessionShowAction
         ]);
 
         $this->history->attachPrevious($user, $session);
+        $this->history->attachTrend($user, $session->recommendations);
         $this->summaries->attach(new Collection([$session]));
 
         return $session;

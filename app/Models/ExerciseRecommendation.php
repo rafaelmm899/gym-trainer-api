@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Data\Exercise\ExercisePerformanceData;
 use App\Enums\Recommendation\RecommendationAction;
 use App\Enums\Recommendation\RecommendationStatus;
 use App\Models\Concerns\HasPublicUuid;
@@ -37,6 +38,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property-read Routine $routine
  * @property-read Exercise $exercise
  * @property-read TrainingSession|null $sourceSession
+ * @property-read array<int, ExercisePerformanceData> $history  Set at runtime by `ExerciseHistoryService::attachTrend()`; absent unless populated
  *
  * @method static \Database\Factories\ExerciseRecommendationFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|ExerciseRecommendation newModelQuery()
