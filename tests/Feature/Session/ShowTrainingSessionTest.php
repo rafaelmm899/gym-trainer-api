@@ -102,7 +102,7 @@ it('gives each set its exercise and formatted numbers', function () {
     $response = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk();
 
     $set = $response->json('data.sets.0');
-    expect(array_keys($set))->toEqualCanonicalizing(['id', 'exercise', 'set_number', 'weight_kg', 'reps', 'rpe', 'note', 'created_at', 'updated_at'])
+    expect(array_keys($set))->toEqualCanonicalizing(['id', 'exercise', 'day_exercise_id', 'set_number', 'weight_kg', 'reps', 'rpe', 'note', 'created_at', 'updated_at'])
         ->and($set['id'])->toMatch(uuidV4Pattern())
         ->and($set['exercise'])->toBeArray()->toHaveKey('name')
         ->and($set['weight_kg'])->toBe(82.5)
@@ -142,7 +142,7 @@ it('gives each recommendation the expected structure', function () {
 
     $item = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk()->json('data.recommendations.0');
 
-    expect(array_keys($item))->toEqualCanonicalizing(['id', 'exercise', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation'])
+    expect(array_keys($item))->toEqualCanonicalizing(['id', 'exercise', 'target_weight_kg', 'target_sets', 'target_rep_min', 'target_rep_max', 'action', 'explanation', 'history'])
         ->and($item['id'])->toMatch(uuidV4Pattern())
         ->and($item['exercise'])->toBeArray()
         ->and($item['action'])->toBeString();
@@ -169,7 +169,7 @@ it('has the expected session structure and formats', function () {
 
     $data = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk()->json('data');
 
-    expect(array_keys($data))->toEqualCanonicalizing(['id', 'status', 'analysis_state', 'note', 'perceived_effort', 'started_at', 'completed_at', 'created_at', 'updated_at', 'cycle_day', 'sets', 'recommendations'])
+    expect(array_keys($data))->toEqualCanonicalizing(['id', 'status', 'analysis_state', 'note', 'perceived_effort', 'started_at', 'completed_at', 'created_at', 'updated_at', 'cycle_day', 'summary', 'sets', 'recommendations'])
         ->and($data['id'])->toMatch(uuidV4Pattern())
         ->and($data['started_at'])->toMatch(iso8601Pattern())
         ->and($data['completed_at'])->toMatch(iso8601Pattern());

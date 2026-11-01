@@ -8,12 +8,19 @@ use App\Models\CycleDay;
 use App\Models\Routine;
 use App\Models\TrainingSession;
 use App\Models\User;
+use App\Services\Exercise\ExerciseHistoryService;
+use App\Services\Session\SessionSummaryService;
 use App\Services\Session\TrainingSessionOpeningService;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
 final class TrainingSessionCreateAction
 {
-    public function __construct(private TrainingSessionOpeningService $opening) {}
+    public function __construct(
+        private TrainingSessionOpeningService $opening,
+        private ExerciseHistoryService $history,
+        private SessionSummaryService $summaries,
+    ) {}
 
     public function handle(User $user, Routine $routine, CreateTrainingSessionData $data): TrainingSession
     {
@@ -30,6 +37,11 @@ final class TrainingSessionCreateAction
             'started_at' => now(),
         ]));
 
-        return $session->load(['cycleDay.cycle', 'cycleDay.dayExercises.exercise']);
+        $session->load(['cycleDay.cycle', 'cycleDay.dayExercises.exercise']);
+
+        $this->history->attachPrevious($user, $session);
+        $this->summaries->attach(new Collection([$session]));
+
+        return $session;
     }
 }

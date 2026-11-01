@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Data\Exercise\ExercisePerformanceData;
 use App\Models\Concerns\HasPublicUuid;
 use Carbon\CarbonImmutable;
 use Database\Factories\DayExerciseFactory;
@@ -30,6 +31,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $updated_at
  * @property-read CycleDay $cycleDay
  * @property-read Exercise $exercise
+ * @property-read ExercisePerformanceData|null $previous  Set at runtime by `ExerciseHistoryService::attachPrevious()`; absent unless populated
  *
  * @method static \Database\Factories\DayExerciseFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|DayExercise newModelQuery()

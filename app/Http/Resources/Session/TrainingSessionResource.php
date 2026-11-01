@@ -28,6 +28,13 @@ class TrainingSessionResource extends JsonResource
             'completed_at' => $this->completed_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
+            'summary' => [
+                'exercises_count' => $this->summary->exercisesCount,
+                'sets_count' => $this->summary->setsCount,
+                'total_volume_kg' => $this->summary->totalVolumeKg,
+                'duration_seconds' => $this->summary->durationSeconds,
+                'volume_change_pct' => $this->summary->volumeChangePct,
+            ],
             'cycle_day' => CycleDayResource::make($this->whenLoaded('cycleDay')),
             'sets' => SetLogResource::collection($this->whenLoaded('sets')),
             'recommendations' => ExerciseRecommendationResource::collection($this->whenLoaded('recommendations')),

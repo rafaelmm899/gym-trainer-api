@@ -19,12 +19,14 @@ final class SetLogCreateAction
     {
         $this->ensureSessionOpen($session);
 
-        $exercise = $this->resolveExercise($session, $data);
+        $dayExercise = $this->resolveDayExercise($session, $data);
+        $exercise = $dayExercise->exercise ?? $this->resolveExercise($data);
 
         $this->ensureSetNumberIsNext($session, $exercise, $data->set_number);
 
         $set = DB::transaction(fn (): SetLog => $session->sets()->create([
             'exercise_id' => $exercise->id,
+            'day_exercise_id' => $dayExercise?->id,
             'set_number' => $data->set_number,
             'weight_kg' => $data->weight_kg,
             'reps' => $data->reps,
@@ -32,7 +34,7 @@ final class SetLogCreateAction
             'note' => $data->note,
         ]));
 
-        return $set->load('exercise');
+        return $set->load(['exercise', 'dayExercise']);
     }
 
     private function ensureSessionOpen(TrainingSession $session): void
@@ -41,23 +43,27 @@ final class SetLogCreateAction
     }
 
     /**
-     * The set's catalogue exercise: straight from `exercise_id` for an off-plan
-     * set, or via `day_exercise_id` — a prescription that must belong to this
-     * session's own training day.
+     * The prescription the client declared, which must belong to this session's
+     * own training day; `null` when the set is off-plan (a bare `exercise_id`).
      */
-    private function resolveExercise(TrainingSession $session, LogSetData $data): Exercise
+    private function resolveDayExercise(TrainingSession $session, LogSetData $data): ?DayExercise
     {
-        if ($data->day_exercise_id !== null) {
-            $dayExercise = DayExercise::query()
-                ->with('exercise')
-                ->where('uuid', $data->day_exercise_id)
-                ->firstOrFail();
-
-            $this->ensurePrescriptionInSession($session, $dayExercise);
-
-            return $dayExercise->exercise;
+        if ($data->day_exercise_id === null) {
+            return null;
         }
 
+        $dayExercise = DayExercise::query()
+            ->with('exercise')
+            ->where('uuid', $data->day_exercise_id)
+            ->firstOrFail();
+
+        $this->ensurePrescriptionInSession($session, $dayExercise);
+
+        return $dayExercise;
+    }
+
+    private function resolveExercise(LogSetData $data): Exercise
+    {
         return Exercise::query()->where('uuid', $data->exercise_id)->firstOrFail();
     }
 

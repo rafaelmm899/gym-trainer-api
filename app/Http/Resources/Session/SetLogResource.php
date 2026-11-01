@@ -20,6 +20,7 @@ class SetLogResource extends JsonResource
         return [
             'id' => $this->uuid,
             'exercise' => ExerciseResource::make($this->whenLoaded('exercise')),
+            'day_exercise_id' => $this->dayExercise?->uuid,
             'set_number' => $this->set_number,
             'weight_kg' => (float) $this->weight_kg,
             'reps' => $this->reps,

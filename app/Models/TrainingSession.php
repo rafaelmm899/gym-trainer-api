@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Data\Session\SessionSummaryData;
 use App\Enums\Session\AnalysisState;
 use App\Enums\Session\SessionStatus;
 use App\Models\Concerns\HasPublicUuid;
@@ -41,6 +42,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read int|null $sets_count
  * @property-read Collection<int, ExerciseRecommendation> $recommendations
  * @property-read int|null $recommendations_count
+ * @property-read SessionSummaryData $summary  Set at runtime by `SessionSummaryService::attach()`; absent unless populated
  *
  * @method static \Database\Factories\TrainingSessionFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TrainingSession newModelQuery()

@@ -7,11 +7,16 @@ use App\Enums\Session\SessionStatus;
 use App\Jobs\Session\SessionAnalysisJob;
 use App\Models\TrainingSession;
 use App\Services\Session\SessionCompletionService;
+use App\Services\Session\SessionSummaryService;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
 final class SessionCloseAction
 {
-    public function __construct(private SessionCompletionService $completion) {}
+    public function __construct(
+        private SessionCompletionService $completion,
+        private SessionSummaryService $summaries,
+    ) {}
 
     public function handle(TrainingSession $session, CompleteSessionData $data): TrainingSession
     {
@@ -27,7 +32,10 @@ final class SessionCloseAction
 
             SessionAnalysisJob::dispatch($session);
 
-            return $session->load('cycleDay.cycle');
+            $session->load('cycleDay.cycle');
+            $this->summaries->attach(new Collection([$session]));
+
+            return $session;
         });
     }
 }
