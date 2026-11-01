@@ -9,7 +9,8 @@ Start here. Read in this order for a first day on the project:
 | 3 | [`DER.md`](DER.md) | The data model: every table, relation, state and invariant. |
 | 4 | [`use-cases.md`](use-cases.md) | Every endpoint and background job: preconditions, behaviour, errors. |
 | 5 | [`flows.md`](flows.md) | Sequence diagrams of the multi-step flows (AI planning, cycle rollover, sessions, analysis, import). |
-| 6 | [`operations.md`](operations.md) | Run it locally, CI, deploy, read logs, troubleshoot. |
+| 6 | [`ai-prompts.md`](ai-prompts.md) | The three AI agents: system instructions, example prompts and responses, validation. |
+| 7 | [`operations.md`](operations.md) | Run it locally, CI, deploy, read logs, troubleshoot. |
 | — | `../CLAUDE.md` (= `AGENTS.md`) | **The code contract**: layering, naming, error envelope, testing, git rules. |
 | — | [`plans/`](plans/) | One spec per shipped feature (the *why* behind a specific decision). |
 | — | [`design/`](design/) | Forward-looking designs not built yet. |
@@ -74,7 +75,7 @@ Rules you will trip over (full text in `CLAUDE.md`):
 | I want to… | Look at |
 |---|---|
 | Add an endpoint | A sibling in the same domain: `routes/api.php` → Request → Controller → Action → Resource. Add `tests/Feature/{Domain}/` |
-| Change what the AI is told | `app/Services/Cycle/CyclePlannerService` (prompts + validation), `app/Ai/Agents/**` (instructions + JSON schema) |
+| Change what the AI is told | `app/Services/Cycle/CyclePlannerService` (prompts + validation), `app/Ai/Agents/**` (instructions + JSON schema); examples in `ai-prompts.md` |
 | Change an AI output shape | The agent's `schema()` **and** the Service that maps/validates it |
 | Add a business rule | A Service guard clause: `throw_if(..., new XException)`; add the exception under `app/Exceptions/{Domain}/` with its `errorCode` |
 | Change a response payload | The Resource in `app/Http/Resources/{Domain}/` |
@@ -102,7 +103,8 @@ same PR**:
 |---|---|
 | Migration / model | `DER.md` |
 | Endpoint, validation rule, domain exception | `use-cases.md` (and its error table) |
-| Job, agent, Action orchestration, state transition | `flows.md` |
+| Job, Action orchestration, state transition | `flows.md` |
+| Agent instructions, prompt builders, response schema | `ai-prompts.md` |
 | Docker, deploy script, scheduler, env var, log channel | `operations.md` |
 
 English only for anything new under `docs/` (see `CLAUDE.md` → Git).
