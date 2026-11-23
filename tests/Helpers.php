@@ -369,3 +369,12 @@ function completedSessionWith(
 
     return $session;
 }
+
+/**
+ * The twelve-record sample of the exercises dataset (two of the records are
+ * invalid on purpose), used by the importer and the dataset service tests.
+ */
+function datasetFixturePath(): string
+{
+    return base_path('tests/Fixtures/exercises-dataset-sample.json');
+}

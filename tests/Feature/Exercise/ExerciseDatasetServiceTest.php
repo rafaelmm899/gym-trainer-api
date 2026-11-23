@@ -6,11 +6,6 @@ use App\Exceptions\Exercise\ExerciseDatasetUnreadableException;
 use App\Services\Exercise\ExerciseDatasetService;
 use Illuminate\Support\Facades\Http;
 
-function datasetFixturePath(): string
-{
-    return base_path('tests/Fixtures/exercises-dataset-sample.json');
-}
-
 function parsedDataset(): ExerciseDatasetData
 {
     $service = app(ExerciseDatasetService::class);
