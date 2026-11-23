@@ -107,6 +107,12 @@ small):
 }
 ```
 
+The prescribed exercises of a cycle day (`DayExerciseResource`, returned by
+routines, cycles and sessions) also gain `exercise_id`, the catalogue uuid of the
+exercise, so clients open `GET /exercises/{exercise}` and
+`GET /exercises/{exercise}/history` by id instead of searching by name. Their own
+`id` stays the uuid of the prescription. The change is additive.
+
 `ExerciseDetailResource` adds `"instructions": ["step 1", "step 2", "..."]`: the
 steps in the negotiated language. Language rule: the best match of
 `Accept-Language` among `config('catalog.locales')` (`en`, `es`; a regional tag
@@ -220,6 +226,7 @@ No other configuration changes.
 | Existing exercises in production | 75 rows, 11 duplicates, 11 broken slugs | 64 rows, duplicates merged, slugs repaired, history repointed, ids and uuids of winners kept |
 | `GET /exercises` | `id`, `name`, `slug`, `primary_muscle_group` | plus `equipment`, `target_muscle`, `secondary_muscles`, `media_url` |
 | `GET /exercises/{exercise}` | does not exist | detail with `instructions` in the `Accept-Language` language |
+| Prescribed exercise payload | `id` (prescription), `name`, prescription | plus `exercise_id` (catalogue uuid); names are no longer needed to find the exercise |
 | Deploy | `migrate` | `migrate` (schema + reconciliation, automatic), then `docker/production/deploy.sh` runs `exercises:import` as a Cloud Run job step; a failed import never blocks the deploy, the script prints the command to rerun it |
 
 ---
