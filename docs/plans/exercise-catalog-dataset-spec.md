@@ -227,6 +227,7 @@ No other configuration changes.
 | `GET /exercises` | `id`, `name`, `slug`, `primary_muscle_group` | plus `equipment`, `target_muscle`, `secondary_muscles`, `media_url` |
 | `GET /exercises/{exercise}` | does not exist | detail with `instructions` in the `Accept-Language` language |
 | Prescribed exercise payload | `id` (prescription), `name`, prescription | plus `exercise_id` (catalogue uuid); names are no longer needed to find the exercise |
+| Day workbook (export / import) | One row per set; the import finds the exercise by the name in the `exercise` column | The export adds a hidden last column `exercise_id` (catalogue uuid). The import matches by it, and the id wins over the name; an id that is not prescribed on that day is rejected (`Unknown exercise for this day.`); a file without the column (exported before) still matches by name |
 | Deploy | `migrate` | `migrate` (schema + reconciliation, automatic), then `docker/production/deploy.sh` runs `exercises:import` as a Cloud Run job step; a failed import never blocks the deploy, the script prints the command to rerun it |
 
 ---

@@ -4,7 +4,6 @@ namespace App\Imports\Cycle;
 
 use App\Models\DayExercise;
 use App\Models\Exercise;
-use Closure;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\Validator;
 use Maatwebsite\Excel\Concerns\Import;
@@ -37,10 +36,32 @@ final class CycleDayImport implements Import, ToCollection, WithHeadingRow, With
 
     /**
      * @param  Collection<string, DayExercise>  $dayExercisesBySlug  keyed by the exercise's catalog slug
+     * @param  Collection<string, DayExercise>  $dayExercisesByExerciseId  keyed by the exercise's catalogue uuid
      */
-    public function __construct(private readonly Collection $dayExercisesBySlug)
-    {
+    public function __construct(
+        private readonly Collection $dayExercisesBySlug,
+        private readonly Collection $dayExercisesByExerciseId,
+    ) {
         $this->rows = collect();
+    }
+
+    /**
+     * The day's prescription a sheet row refers to. The `exercise_id` column wins
+     * when it is filled — an id that is not in this day matches nothing, even if
+     * the name would. Without it (a file exported before the column existed, or
+     * one where it was deleted) the name is matched through its slug.
+     *
+     * @param  array<string, mixed>|Collection<string, mixed>  $row
+     */
+    public function dayExerciseFor(array|Collection $row): ?DayExercise
+    {
+        $exerciseId = trim((string) data_get($row, 'exercise_id'));
+
+        if ($exerciseId !== '') {
+            return $this->dayExercisesByExerciseId->get($exerciseId);
+        }
+
+        return $this->dayExercisesBySlug->get(Exercise::slugFor((string) data_get($row, 'exercise')));
     }
 
     /**
@@ -84,7 +105,6 @@ final class CycleDayImport implements Import, ToCollection, WithHeadingRow, With
             'reps.multiple_of' => 'Must be a whole number greater than 0.',
             'rpe.numeric' => 'Must be a number between 0 and 10.',
             'rpe.between' => 'Must be a number between 0 and 10.',
-            'exercise.required' => 'Unknown exercise for this day.',
         ];
     }
 
@@ -95,15 +115,13 @@ final class CycleDayImport implements Import, ToCollection, WithHeadingRow, With
         $validator->sometimes('*.weight_kg', ['numeric', 'gt:0'], $isFilled);
         $validator->sometimes('*.reps', ['numeric', 'gt:0', 'multiple_of:1'], $isFilled);
         $validator->sometimes('*.rpe', ['nullable', 'numeric', 'between:0,10'], $isFilled);
-        $validator->sometimes('*.exercise', ['required', $this->matchesDayExercise()], $isFilled);
-    }
 
-    private function matchesDayExercise(): Closure
-    {
-        return function (string $attribute, mixed $value, Closure $fail): void {
-            if (! $this->dayExercisesBySlug->has(Exercise::slugFor((string) $value))) {
-                $fail('Unknown exercise for this day.');
+        $validator->after(function (Validator $validator): void {
+            foreach ($validator->getData() as $index => $row) {
+                if (filled($row['weight_kg'] ?? null) && filled($row['reps'] ?? null) && $this->dayExerciseFor($row) === null) {
+                    $validator->errors()->add("{$index}.exercise", 'Unknown exercise for this day.');
+                }
             }
-        };
+        });
     }
 }

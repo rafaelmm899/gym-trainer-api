@@ -268,10 +268,11 @@ function prescribeExercise(CycleDay $day, string $name, int $order = 1): DayExer
  *
  * @return array<string, mixed>
  */
-function importRow(?string $exercise, mixed $weightKg = null, mixed $reps = null, mixed $rpe = null, ?string $note = null): array
+function importRow(?string $exercise, mixed $weightKg = null, mixed $reps = null, mixed $rpe = null, ?string $note = null, ?string $exerciseId = null): array
 {
     return [
         'exercise' => $exercise,
+        'exercise_id' => $exerciseId,
         'weight_kg' => $weightKg,
         'reps' => $reps,
         'rpe' => $rpe,
@@ -282,17 +283,19 @@ function importRow(?string $exercise, mixed $weightKg = null, mixed $reps = null
 /**
  * A real, readable `.xlsx` `UploadedFile` — the header row from
  * `App\Exports\Cycle\CycleDayExport::headings()`, then one data row per entry
- * of `$rows` ({@see importRow()} shape; missing keys write blank cells).
+ * of `$rows` ({@see importRow()} shape; missing keys write blank cells). Pass
+ * `$withExerciseId = false` for a file exported before the `exercise_id` column.
  * Built with `phpoffice/phpspreadsheet` directly (not `Excel::fake()`) so
  * `CycleDayImportService` exercises its real reader in every test.
  *
  * @param  list<array<string, mixed>>  $rows
  */
-function buildXlsxUploadedFile(array $rows, string $filename = 'import.xlsx'): UploadedFile
+function buildXlsxUploadedFile(array $rows, string $filename = 'import.xlsx', bool $withExerciseId = true): UploadedFile
 {
     $headings = [
         'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
         'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+        ...($withExerciseId ? ['exercise_id'] : []),
     ];
 
     $spreadsheet = new Spreadsheet;
