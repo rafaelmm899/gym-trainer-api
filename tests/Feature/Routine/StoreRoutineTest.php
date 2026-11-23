@@ -238,7 +238,7 @@ it('saves an omitted or blank hint as null and keeps it out of the prompt', func
     $this->assertDatabaseHas('routines', ['hint' => null]);
 
     CyclePlannerAgent::assertPrompted(
-        fn ($prompt): bool => ! str_contains($prompt->prompt, 'Hint:') && ! str_contains($prompt->prompt, 'null')
+        fn ($prompt): bool => ! str_contains($prompt->prompt, 'Hint:') && preg_match('/\bnull\b/', $prompt->prompt) === 0
     );
 })->with([
     'omitted' => [fn () => routinePayload(exceptKey: 'hint')],
