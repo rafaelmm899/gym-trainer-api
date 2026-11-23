@@ -12,11 +12,11 @@ use App\Exceptions\Session\CycleDayAlreadyCompletedException;
 use App\Imports\Cycle\CycleDayImport;
 use App\Models\CycleDay;
 use App\Models\DayExercise;
+use App\Models\Exercise;
 use App\Models\Routine;
 use App\Models\TrainingSession;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Validators\Failure;
 use Maatwebsite\Excel\Validators\ValidationException as ExcelValidationException;
@@ -149,7 +149,7 @@ final class CycleDayImportService
             }
 
             /** @var DayExercise $dayExercise */
-            $dayExercise = $dayExercisesBySlug->get(Str::slug(Str::ascii((string) $row['exercise'])));
+            $dayExercise = $dayExercisesBySlug->get(Exercise::slugFor((string) $row['exercise']));
 
             $setNumbers[$dayExercise->exercise_id] = ($setNumbers[$dayExercise->exercise_id] ?? 0) + 1;
 

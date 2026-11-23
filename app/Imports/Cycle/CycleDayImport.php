@@ -3,9 +3,9 @@
 namespace App\Imports\Cycle;
 
 use App\Models\DayExercise;
+use App\Models\Exercise;
 use Closure;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Validator;
 use Maatwebsite\Excel\Concerns\Import;
 use Maatwebsite\Excel\Concerns\ToCollection;
@@ -101,7 +101,7 @@ final class CycleDayImport implements Import, ToCollection, WithHeadingRow, With
     private function matchesDayExercise(): Closure
     {
         return function (string $attribute, mixed $value, Closure $fail): void {
-            if (! $this->dayExercisesBySlug->has(Str::slug(Str::ascii((string) $value)))) {
+            if (! $this->dayExercisesBySlug->has(Exercise::slugFor((string) $value))) {
                 $fail('Unknown exercise for this day.');
             }
         };

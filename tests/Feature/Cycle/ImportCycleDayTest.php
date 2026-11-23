@@ -270,3 +270,21 @@ it('is blocked by an unrelated in-progress session', function () {
 
     expect(TrainingSession::query()->where('cycle_day_id', $day->id)->count())->toBe(0);
 });
+
+// TC-6
+it('matches an exercise whose name has a non-breaking hyphen', function () {
+    Bus::fake([SessionAnalysisJob::class]);
+
+    [$routine, $day] = importRoutineWithActiveDay($this->user);
+    prescribeExercise($day, 'Pull-Ups', 1);
+
+    $file = buildXlsxUploadedFile([importRow("Pull\u{2011}Ups", 20, 8)]);
+
+    $this->actingAs($this->user)
+        ->post(importUrl($routine, $day), ['file' => $file])
+        ->assertCreated();
+
+    $session = TrainingSession::query()->where('cycle_day_id', $day->id)->sole();
+
+    expect(SetLog::query()->where('session_id', $session->id)->count())->toBe(1);
+});

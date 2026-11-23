@@ -3,15 +3,16 @@
 namespace App\Services\Exercise;
 
 use App\Enums\Shared\MuscleGroup;
+use App\Exceptions\Exercise\ExerciseMuscleGroupRequiredException;
 use App\Models\Exercise;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
  * Resolves a free-text exercise name (from the AI planner) to a row in the
- * global {@see Exercise} catalogue: normalise to a slug, reuse the row if it
- * exists, insert it otherwise. Semantic duplicates ("Bench Press" vs "Barbell
+ * global {@see Exercise} catalogue: normalise to a slug ({@see Exercise::slugFor()}),
+ * reuse the row if it exists, insert it otherwise — and only with a valid muscle
+ * group. Semantic duplicates ("Bench Press" vs "Barbell
  * Bench Press") are only logged for a later manual merge — no alias table in v1.
  */
 final class ExerciseCatalogService
@@ -31,7 +32,7 @@ final class ExerciseCatalogService
             throw new InvalidArgumentException('Exercise name cannot be blank.');
         }
 
-        $slug = Str::slug(Str::ascii($name));
+        $slug = Exercise::slugFor($name);
 
         $existing = Exercise::query()->where('slug', $slug)->first();
 
@@ -39,10 +40,14 @@ final class ExerciseCatalogService
             return $existing;
         }
 
+        $muscleGroup = MuscleGroup::tryFrom((string) $muscleGroupHint);
+
+        throw_if($muscleGroup === null, new ExerciseMuscleGroupRequiredException);
+
         $exercise = Exercise::query()->create([
             'name' => $name,
             'slug' => $slug,
-            'primary_muscle_group' => MuscleGroup::tryFrom((string) $muscleGroupHint)?->value,
+            'primary_muscle_group' => $muscleGroup->value,
             'created_by_ai' => true,
         ]);
 

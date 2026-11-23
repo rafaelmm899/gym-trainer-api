@@ -14,7 +14,6 @@ use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
@@ -257,7 +256,7 @@ function importRoutineWithActiveDay(User $user): array
  */
 function prescribeExercise(CycleDay $day, string $name, int $order = 1): DayExercise
 {
-    $exercise = Exercise::factory()->create(['name' => $name, 'slug' => Str::slug(Str::ascii($name))]);
+    $exercise = Exercise::factory()->create(['name' => $name, 'slug' => Exercise::slugFor($name)]);
 
     return DayExercise::factory()->for($day)->for($exercise)->create(['order' => $order]);
 }
