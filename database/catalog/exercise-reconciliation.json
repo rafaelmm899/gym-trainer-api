@@ -1,0 +1,527 @@
+[
+  {
+    "id": 1,
+    "name": "Barbell Bench Press",
+    "action": "enrich",
+    "external_id": "0025",
+    "merge_into_id": null
+  },
+  {
+    "id": 2,
+    "name": "Incline Dumbbell Press",
+    "action": "enrich",
+    "external_id": "0314",
+    "merge_into_id": null
+  },
+  {
+    "id": 3,
+    "name": "Seated Overhead Press",
+    "action": "enrich",
+    "external_id": "0405",
+    "merge_into_id": null
+  },
+  {
+    "id": 4,
+    "name": "Lateral Raises",
+    "action": "enrich",
+    "external_id": "0334",
+    "merge_into_id": null
+  },
+  {
+    "id": 5,
+    "name": "Close‑Grip Bench Press",
+    "action": "enrich",
+    "external_id": "0030",
+    "merge_into_id": null
+  },
+  {
+    "id": 6,
+    "name": "Triceps Rope Pushdown",
+    "action": "enrich",
+    "external_id": "0241",
+    "merge_into_id": null
+  },
+  {
+    "id": 7,
+    "name": "Front Squat",
+    "action": "enrich",
+    "external_id": "0042",
+    "merge_into_id": null
+  },
+  {
+    "id": 8,
+    "name": "Leg Extension",
+    "action": "enrich",
+    "external_id": "0585",
+    "merge_into_id": null
+  },
+  {
+    "id": 9,
+    "name": "Deadlift",
+    "action": "enrich",
+    "external_id": "0032",
+    "merge_into_id": null
+  },
+  {
+    "id": 10,
+    "name": "Bent‑Over Barbell Row",
+    "action": "enrich",
+    "external_id": "0027",
+    "merge_into_id": null
+  },
+  {
+    "id": 11,
+    "name": "Pull‑Ups",
+    "action": "enrich",
+    "external_id": "0652",
+    "merge_into_id": null
+  },
+  {
+    "id": 12,
+    "name": "Seated Cable Row",
+    "action": "enrich",
+    "external_id": "0861",
+    "merge_into_id": null
+  },
+  {
+    "id": 13,
+    "name": "Barbell Hip Thrust",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 14,
+    "name": "Lying Leg Curl",
+    "action": "enrich",
+    "external_id": "0586",
+    "merge_into_id": null
+  },
+  {
+    "id": 15,
+    "name": "Standing Calf Raise",
+    "action": "enrich",
+    "external_id": "0605",
+    "merge_into_id": null
+  },
+  {
+    "id": 16,
+    "name": "Dumbbell Hammer Curl",
+    "action": "enrich",
+    "external_id": "0313",
+    "merge_into_id": null
+  },
+  {
+    "id": 17,
+    "name": "Bulgarian Split Squat",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 18,
+    "name": "Cable Pull‑Through",
+    "action": "enrich",
+    "external_id": "0196",
+    "merge_into_id": null
+  },
+  {
+    "id": 19,
+    "name": "Hip Abduction Machine",
+    "action": "enrich",
+    "external_id": "0597",
+    "merge_into_id": null
+  },
+  {
+    "id": 20,
+    "name": "Reverse Hyperextension",
+    "action": "enrich",
+    "external_id": "0593",
+    "merge_into_id": null
+  },
+  {
+    "id": 21,
+    "name": "Hanging Leg Raise",
+    "action": "enrich",
+    "external_id": "0472",
+    "merge_into_id": null
+  },
+  {
+    "id": 22,
+    "name": "Cable Woodchopper",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 23,
+    "name": "Plank",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 24,
+    "name": "Russian Twist",
+    "action": "enrich",
+    "external_id": "0687",
+    "merge_into_id": null
+  },
+  {
+    "id": 25,
+    "name": "Dumbbell Flat Press",
+    "action": "enrich",
+    "external_id": "0289",
+    "merge_into_id": null
+  },
+  {
+    "id": 26,
+    "name": "Chest Dips",
+    "action": "enrich",
+    "external_id": "0251",
+    "merge_into_id": null
+  },
+  {
+    "id": 27,
+    "name": "Arnold Press",
+    "action": "enrich",
+    "external_id": "2137",
+    "merge_into_id": null
+  },
+  {
+    "id": 28,
+    "name": "Face Pull",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 29,
+    "name": "Incline Close‑Grip Bench",
+    "action": "enrich",
+    "external_id": "1719",
+    "merge_into_id": null
+  },
+  {
+    "id": 30,
+    "name": "Overhead Triceps Extension",
+    "action": "enrich",
+    "external_id": "0194",
+    "merge_into_id": null
+  },
+  {
+    "id": 31,
+    "name": "Hack Squat",
+    "action": "enrich",
+    "external_id": "0743",
+    "merge_into_id": null
+  },
+  {
+    "id": 32,
+    "name": "Rack Pulls",
+    "action": "enrich",
+    "external_id": "0074",
+    "merge_into_id": null
+  },
+  {
+    "id": 33,
+    "name": "T‑Bar Row",
+    "action": "enrich",
+    "external_id": "0606",
+    "merge_into_id": null
+  },
+  {
+    "id": 34,
+    "name": "Chin‑Ups",
+    "action": "enrich",
+    "external_id": "1326",
+    "merge_into_id": null
+  },
+  {
+    "id": 35,
+    "name": "Straight‑Arm Pulldown",
+    "action": "enrich",
+    "external_id": "0238",
+    "merge_into_id": null
+  },
+  {
+    "id": 36,
+    "name": "Romanian Deadlift",
+    "action": "enrich",
+    "external_id": "0085",
+    "merge_into_id": null
+  },
+  {
+    "id": 37,
+    "name": "Good Mornings",
+    "action": "enrich",
+    "external_id": "0044",
+    "merge_into_id": null
+  },
+  {
+    "id": 38,
+    "name": "Donkey Calf Raise",
+    "action": "enrich",
+    "external_id": "0284",
+    "merge_into_id": null
+  },
+  {
+    "id": 39,
+    "name": "Seated Calf Press",
+    "action": "enrich",
+    "external_id": "2335",
+    "merge_into_id": null
+  },
+  {
+    "id": 40,
+    "name": "Dumbbell Bench Press",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 25
+  },
+  {
+    "id": 41,
+    "name": "Dumbbell Shoulder Press",
+    "action": "untouched",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 42,
+    "name": "Dumbbell Incline Fly",
+    "action": "enrich",
+    "external_id": "0319",
+    "merge_into_id": null
+  },
+  {
+    "id": 43,
+    "name": "Dumbbell Lateral Raise",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 4
+  },
+  {
+    "id": 44,
+    "name": "One‑Arm Dumbbell Row",
+    "action": "enrich",
+    "external_id": "0292",
+    "merge_into_id": null
+  },
+  {
+    "id": 45,
+    "name": "Bent‑Over Reverse Fly",
+    "action": "enrich",
+    "external_id": "0378",
+    "merge_into_id": null
+  },
+  {
+    "id": 46,
+    "name": "Standing Dumbbell Biceps Curl",
+    "action": "enrich",
+    "external_id": "0294",
+    "merge_into_id": null
+  },
+  {
+    "id": 47,
+    "name": "Hammer Curl",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 16
+  },
+  {
+    "id": 48,
+    "name": "Renegade Row (bodyweight core focus)",
+    "action": "untouched",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 49,
+    "name": "Goblet Squat",
+    "action": "enrich",
+    "external_id": "1760",
+    "merge_into_id": null
+  },
+  {
+    "id": 50,
+    "name": "Dumbbell Romanian Deadlift",
+    "action": "enrich",
+    "external_id": "1459",
+    "merge_into_id": null
+  },
+  {
+    "id": 51,
+    "name": "Dumbbell Walking Lunge",
+    "action": "enrich",
+    "external_id": "1460",
+    "merge_into_id": null
+  },
+  {
+    "id": 52,
+    "name": "Standing Dumbbell Calf Raise",
+    "action": "enrich",
+    "external_id": "0417",
+    "merge_into_id": null
+  },
+  {
+    "id": 53,
+    "name": "Dumbbell Hip Bridge",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 13
+  },
+  {
+    "id": 54,
+    "name": "Dumbbell Russian Twist",
+    "action": "enrich",
+    "external_id": "0846",
+    "merge_into_id": null
+  },
+  {
+    "id": 55,
+    "name": "Dumbbell Front Raise",
+    "action": "enrich",
+    "external_id": "0310",
+    "merge_into_id": null
+  },
+  {
+    "id": 56,
+    "name": "Upright Row",
+    "action": "enrich",
+    "external_id": "0437",
+    "merge_into_id": null
+  },
+  {
+    "id": 57,
+    "name": "Triceps Kickback",
+    "action": "enrich",
+    "external_id": "0333",
+    "merge_into_id": null
+  },
+  {
+    "id": 58,
+    "name": "Dumbbell Deadlift",
+    "action": "enrich",
+    "external_id": "0300",
+    "merge_into_id": null
+  },
+  {
+    "id": 59,
+    "name": "Dumbbell Pull‑Over",
+    "action": "enrich",
+    "external_id": "0375",
+    "merge_into_id": null
+  },
+  {
+    "id": 60,
+    "name": "Concentration Curl",
+    "action": "enrich",
+    "external_id": "0297",
+    "merge_into_id": null
+  },
+  {
+    "id": 61,
+    "name": "Alternating Dumbbell Row",
+    "action": "manual",
+    "external_id": null,
+    "merge_into_id": null
+  },
+  {
+    "id": 62,
+    "name": "One-Arm Dumbbell Row",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 44
+  },
+  {
+    "id": 63,
+    "name": "Renegade Row",
+    "action": "enrich",
+    "external_id": "0521",
+    "merge_into_id": null
+  },
+  {
+    "id": 64,
+    "name": "Bench Press",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 1
+  },
+  {
+    "id": 65,
+    "name": "Overhead Press",
+    "action": "enrich",
+    "external_id": "0426",
+    "merge_into_id": null
+  },
+  {
+    "id": 66,
+    "name": "Dumbbell Fly",
+    "action": "enrich",
+    "external_id": "0308",
+    "merge_into_id": null
+  },
+  {
+    "id": 67,
+    "name": "Triceps Pushdown",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 6
+  },
+  {
+    "id": 68,
+    "name": "Lateral Raise",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 4
+  },
+  {
+    "id": 69,
+    "name": "Lat Pulldown",
+    "action": "enrich",
+    "external_id": "2330",
+    "merge_into_id": null
+  },
+  {
+    "id": 70,
+    "name": "Seated Row",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 12
+  },
+  {
+    "id": 71,
+    "name": "Dumbbell Curl",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 46
+  },
+  {
+    "id": 72,
+    "name": "Back Squat",
+    "action": "enrich",
+    "external_id": "0043",
+    "merge_into_id": null
+  },
+  {
+    "id": 73,
+    "name": "Leg Press",
+    "action": "enrich",
+    "external_id": "0739",
+    "merge_into_id": null
+  },
+  {
+    "id": 74,
+    "name": "Walking Lunges",
+    "action": "merge",
+    "external_id": null,
+    "merge_into_id": 51
+  },
+  {
+    "id": 75,
+    "name": "Hip Thrust",
+    "action": "enrich",
+    "external_id": "1409",
+    "merge_into_id": null
+  }
+]
