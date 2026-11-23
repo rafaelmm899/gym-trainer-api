@@ -191,3 +191,20 @@ it('renders the resource without triggering a lazy load', function () {
     $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}/recommendations")
         ->assertOk();
 });
+
+// Catalogue spec TC-39
+it('nests the exercise without its instructions', function () {
+    $exercise = Exercise::factory()->create([
+        'equipment' => 'barbell',
+        'instructions' => ['en' => ['Lie on a bench.']],
+    ]);
+    $routine = routineWithCurrentCycleExercises($this->user, [$exercise]);
+    ExerciseRecommendation::factory()->for($this->user)->for($routine)->for($exercise)->create();
+
+    $nested = $this->actingAs($this->user)->getJson("/api/v1/routines/{$routine->uuid}/recommendations")
+        ->assertOk()
+        ->json('data.0.exercise');
+
+    expect($nested)->toHaveKey('equipment', 'barbell')
+        ->and($nested)->not->toHaveKey('instructions');
+});

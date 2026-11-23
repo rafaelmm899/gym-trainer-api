@@ -9,6 +9,7 @@ use App\Http\Controllers\Cycle\GenerateCycleController;
 use App\Http\Controllers\Cycle\ImportCycleDayController;
 use App\Http\Controllers\Exercise\ListExerciseHistoryController;
 use App\Http\Controllers\Exercise\ListExercisesController;
+use App\Http\Controllers\Exercise\ShowExerciseController;
 use App\Http\Controllers\Profile\ShowAthleteProfileController;
 use App\Http\Controllers\Profile\UpdateAthleteProfileController;
 use App\Http\Controllers\Recommendation\ListRoutineRecommendationsController;
@@ -104,6 +105,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     // Exercise catalogue: global, read-only, owned by no one — no Policy.
     Route::get('exercises', ListExercisesController::class)->name('exercises.list');
+
+    // One exercise with its instructions in the language of Accept-Language.
+    // Global like the list: no Policy.
+    Route::get('exercises/{exercise}', ShowExerciseController::class)
+        ->whereUuid('exercise')
+        ->name('exercises.show');
 
     // One exercise's completed sessions of the authenticated user, newest first.
     // No Policy: the exercise is global; the Service scopes everything to the
