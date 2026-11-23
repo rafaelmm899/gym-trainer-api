@@ -1,0 +1,343 @@
+[
+  {
+    "id": "0001",
+    "name": "3/4 sit-up",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "body weight",
+    "target": "abs",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "hip flexors",
+      "lower back"
+    ],
+    "instructions": {
+      "en": "Lie flat on your back. Curl up three quarters of the way.",
+      "es": "Túmbate boca arriba. Sube tres cuartos del recorrido."
+    },
+    "instruction_steps": {
+      "en": [
+        "Lie flat on your back.",
+        "Curl up three quarters of the way."
+      ],
+      "es": [
+        "Túmbate boca arriba.",
+        "Sube tres cuartos del recorrido."
+      ]
+    },
+    "media_id": "abc0001",
+    "image": "images/0001-abc.jpg",
+    "gif_url": "videos/0001-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0025",
+    "name": "barbell bench press",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "barbell",
+    "target": "pectorals",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "triceps",
+      "shoulders"
+    ],
+    "instructions": {
+      "en": "Lie on a bench. Lower the bar to your chest. Press it back up.",
+      "es": "Túmbate en un banco. Baja la barra al pecho. Empuja de vuelta."
+    },
+    "instruction_steps": {
+      "en": [
+        "Lie on a bench.",
+        "Lower the bar to your chest.",
+        "Press it back up."
+      ],
+      "es": [
+        "Túmbate en un banco.",
+        "Baja la barra al pecho.",
+        "Empuja de vuelta."
+      ]
+    },
+    "media_id": "abc0025",
+    "image": "images/0025-abc.jpg",
+    "gif_url": "videos/0025-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0334",
+    "name": "dumbbell lateral raise",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "dumbbell",
+    "target": "delts",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "traps"
+    ],
+    "instructions": {
+      "en": "Hold dumbbells at your sides. Raise them to shoulder height.",
+      "es": "Sujeta las mancuernas a los lados. Elévalas hasta los hombros."
+    },
+    "instruction_steps": {
+      "en": [
+        "Hold dumbbells at your sides.",
+        "Raise them to shoulder height."
+      ],
+      "es": [
+        "Sujeta las mancuernas a los lados.",
+        "Elévalas hasta los hombros."
+      ]
+    },
+    "media_id": "abc0334",
+    "image": "images/0334-abc.jpg",
+    "gif_url": "videos/0334-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0472",
+    "name": "hanging leg raise",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "body weight",
+    "target": "abs",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "hip flexors"
+    ],
+    "instructions": {
+      "en": "Hang from a bar. Raise your legs.",
+      "es": "Cuélgate de una barra. Eleva las piernas."
+    },
+    "instruction_steps": {
+      "en": [
+        "Hang from a bar.",
+        "Raise your legs."
+      ],
+      "es": [
+        "Cuélgate de una barra.",
+        "Eleva las piernas."
+      ]
+    },
+    "media_id": "abc0472",
+    "image": "images/0472-abc.jpg",
+    "gif_url": "videos/0472-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0739",
+    "name": "sled 45в° leg press",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "sled machine",
+    "target": "glutes",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "quads"
+    ],
+    "instructions": {
+      "en": "Sit in the sled. Press the platform.",
+      "es": "Siéntate en el trineo. Empuja la plataforma."
+    },
+    "instruction_steps": {
+      "en": [
+        "Sit in the sled.",
+        "Press the platform."
+      ],
+      "es": [
+        "Siéntate en el trineo.",
+        "Empuja la plataforma."
+      ]
+    },
+    "media_id": "abc0739",
+    "image": "images/0739-abc.jpg",
+    "gif_url": "videos/0739-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0088",
+    "name": "barbell seated calf raise",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "barbell",
+    "target": "calves",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "soleus"
+    ],
+    "instructions": {
+      "en": "Sit with the bar on your thighs. Raise your heels.",
+      "es": "Siéntate con la barra sobre los muslos. Eleva los talones."
+    },
+    "instruction_steps": {
+      "en": [
+        "Sit with the bar on your thighs.",
+        "Raise your heels."
+      ],
+      "es": [
+        "Siéntate con la barra sobre los muslos.",
+        "Eleva los talones."
+      ]
+    },
+    "media_id": "abc0088",
+    "image": "images/0088-abc.jpg",
+    "gif_url": "videos/0088-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "1371",
+    "name": "barbell seated calf raise",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "barbell",
+    "target": "calves",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "soleus"
+    ],
+    "instructions": {
+      "en": "Sit with the bar on your thighs. Lift your heels high.",
+      "es": "Siéntate con la barra sobre los muslos. Eleva mucho los talones."
+    },
+    "instruction_steps": {
+      "en": [
+        "Sit with the bar on your thighs.",
+        "Lift your heels high."
+      ],
+      "es": [
+        "Siéntate con la barra sobre los muslos.",
+        "Eleva mucho los talones."
+      ]
+    },
+    "media_id": "abc1371",
+    "image": "images/1371-abc.jpg",
+    "gif_url": "videos/1371-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0090",
+    "name": "barbell wrist curl",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "barbell",
+    "target": "forearms",
+    "muscle_group": "x",
+    "secondary_muscles": [],
+    "instructions": {
+      "en": "Rest your forearms on a bench. Curl the bar with your wrists.",
+      "es": "Apoya los antebrazos en un banco. Flexiona las muñecas."
+    },
+    "instruction_steps": {
+      "en": [
+        "Rest your forearms on a bench.",
+        "Curl the bar with your wrists."
+      ],
+      "es": [
+        "Apoya los antebrazos en un banco.",
+        "Flexiona las muñecas."
+      ]
+    },
+    "media_id": "abc0090",
+    "image": "images/0090-abc.jpg",
+    "gif_url": "videos/0090-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "0100",
+    "name": "jump rope",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "rope",
+    "target": "cardiovascular system",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "calves"
+    ],
+    "instructions": {
+      "en": "Hold the handles. Jump over the rope.",
+      "es": "Sujeta las asas. Salta la cuerda."
+    },
+    "instruction_steps": {
+      "en": [
+        "Hold the handles.",
+        "Jump over the rope."
+      ],
+      "es": [
+        "Sujeta las asas.",
+        "Salta la cuerda."
+      ]
+    },
+    "media_id": "abc0100",
+    "image": "images/0100-abc.jpg",
+    "gif_url": "videos/0100-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "3001",
+    "name": "cable curl (english only)",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "cable",
+    "target": "biceps",
+    "muscle_group": "x",
+    "secondary_muscles": [
+      "forearms"
+    ],
+    "instructions": {
+      "en": "Stand at the cable. Curl the handle."
+    },
+    "instruction_steps": {
+      "en": [
+        "Stand at the cable.",
+        "Curl the handle."
+      ]
+    },
+    "media_id": "abc3001",
+    "image": "images/3001-abc.jpg",
+    "gif_url": "videos/3001-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "2000",
+    "name": "made up move",
+    "category": "x",
+    "body_part": "x",
+    "equipment": "body weight",
+    "target": "xyz",
+    "muscle_group": "x",
+    "secondary_muscles": [],
+    "instructions": {
+      "en": "Do the thing.",
+      "es": "Haz la cosa."
+    },
+    "instruction_steps": {
+      "en": [
+        "Do the thing."
+      ],
+      "es": [
+        "Haz la cosa."
+      ]
+    },
+    "media_id": "abc2000",
+    "image": "images/2000-abc.jpg",
+    "gif_url": "videos/2000-abc.gif",
+    "attribution": "© Gym visual — https://gymvisual.com/",
+    "created_at": "2026-03-18T12:31:32+00:00"
+  },
+  {
+    "id": "3000",
+    "name": "broken record",
+    "equipment": "body weight",
+    "target": "abs",
+    "secondary_muscles": []
+  }
+]
