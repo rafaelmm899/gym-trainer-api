@@ -151,7 +151,7 @@ Not applicable — no components affected.
 | Table | Action | Details |
 |---|---|---|
 | `exercises` | Add columns (migration `2026_11_23_120000_add_catalogue_columns_to_exercises_table`) | `external_id` string(8) nullable **unique** (dataset id such as `"0025"`; several NULLs allowed); `equipment` string nullable (raw dataset value, e.g. `barbell`); `target_muscle` string nullable (raw dataset `target`, e.g. `pectorals`); `secondary_muscles` json nullable (list of strings); `instructions` json nullable (`{"en": [steps], "es": [steps]}`); `media_url` string nullable. Every column is nullable, so the previous web revision keeps working while the migration runs ahead of the deploy. Slug stays unique |
-| `exercises` | Data migration `2026_11_23_120100_reconcile_existing_exercises` | Reads `database/catalog/exercise-reconciliation.json` (75 entries: `id`, `name`, `action` = `enrich` / `merge` / `manual` / `untouched`, `external_id`, `merge_into_id`). Self-contained (query builder only, no models or services). In one transaction: (1) if no entry matches an existing row by `id` and `name`, do nothing (empty or development database); (2) if some match but any entry does not, throw and list them (rolls back); (3) for each `merge` pair, throw if a session has sets of both exercises, if a `(user, routine)` has a recommendation for both, or if a cycle day prescribes both; (4) repoint `day_exercises`, `set_logs` and `exercise_recommendations` of each merged exercise to its winner and delete it; (5) set `external_id` on the 56 `enrich` rows; (6) recompute the slug of every existing row with the new rule and throw if a recomputed slug is already taken. `down()` is a documented no-op (the deleted rows cannot be restored; the runbook requires a backup) |
+| `exercises` | Data migration `2026_11_23_120100_reconcile_existing_exercises` | Reads `database/catalog/exercise-reconciliation.json` (75 entries: `id`, `name`, `action` = `enrich` / `merge` / `manual` / `untouched`, `external_id`, `merge_into_id`). Self-contained (query builder only, no models or services). In one transaction: (1) if no entry matches an existing row by `id` and `name` (empty or development database), skip steps 2 to 5; (2) if some match but any entry does not, throw and list them (rolls back); (3) for each `merge` pair, throw if a session has sets of both exercises, if a `(user, routine)` has a recommendation for both, or if a cycle day prescribes both; (4) repoint `day_exercises`, `set_logs` and `exercise_recommendations` of each merged exercise to its winner and delete it; (5) set `external_id` on the 56 `enrich` rows; (6) always, recompute the slug of every exercise whose name contains a Unicode hyphen (U+2010 to U+2015) with the new rule and throw if the recomputed slug is already taken. Other slugs are never recomputed, so a database where the importer already ran (slugs with an `-<external_id>` suffix) is not disturbed. `down()` is a documented no-op (the deleted rows cannot be restored; the runbook requires a backup) |
 
 The model gets the new `#[Fillable]` fields, `secondary_muscles` and
 `instructions` cast to `array`, the `@method` PHPDoc for `slugFor()`, and a
@@ -399,9 +399,9 @@ pair, a row with an unknown `target`, a row without Spanish steps).*
 - **Expect:** it throws listing the entry; nothing changed.
 
 **TC-32:** a database that does not look like production is left alone
-- **Given:** a database with unrelated exercises, or none.
+- **Given:** a database with unrelated exercises, one whose name has a non-breaking hyphen and a stale slug, and one with an importer slug suffix (`barbell-seated-calf-raise-1371`).
 - **When:** running the migration.
-- **Expect:** nothing changes and no exception.
+- **Expect:** no merge, no `external_id`, no exception; only the hyphenated name gets its slug repaired (`pull-ups`); the other slugs are unchanged.
 
 **TC-33:** manual and untouched rows keep their identity
 - **Given:** the 75 rows, including the 6 `manual` and 2 `untouched` entries.
