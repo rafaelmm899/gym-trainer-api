@@ -110,10 +110,10 @@ it('exposes uuids only and never internal ids or a routine block', function () {
         ->assertJsonMissingPath('data.user_id')
         ->assertJsonMissingPath('data.routine_id')
         ->assertJsonMissingPath('data.routine')
-        ->assertJsonMissingPath('data.cycle_day.cycle_id')
-        ->assertJsonMissingPath('data.cycle_day.exercises.0.exercise_id');
+        ->assertJsonMissingPath('data.cycle_day.cycle_id');
 
-    expect($response->json('data.cycle_day.id'))->toMatch(uuidV4Pattern());
+    expect($response->json('data.cycle_day.id'))->toMatch(uuidV4Pattern())
+        ->and($response->json('data.cycle_day.exercises.0.exercise_id'))->toMatch(uuidV4Pattern());
 });
 
 // TC-6

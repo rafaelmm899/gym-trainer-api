@@ -66,7 +66,7 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
             - `target_rpe` is 0–10, or null.
             - Every value in a day's `focus_muscle_groups` and every exercise's
               `primary_muscle_group` MUST be one of: {$groups}
-              (`primary_muscle_group` may also be null).
+              (`primary_muscle_group` is required on every exercise).
             - RECOVERY: two back-to-back days MUST NOT share any muscle group.
               Day N and day N+1 must have disjoint `focus_muscle_groups`, and no
               `primary_muscle_group` may appear on both. A muscle group trained
@@ -119,8 +119,8 @@ final class CyclePlannerAgent implements Agent, HasStructuredOutput
                     'day_rationale' => $schema->string(),
                     'exercises' => $schema->array()->items($this->object($schema, [
                         'name' => $schema->string()->description('Exercise name, free text.'),
-                        'primary_muscle_group' => $schema->string()->enum(MuscleGroup::values())->nullable()
-                            ->description('One of the listed muscle groups, or null.'),
+                        'primary_muscle_group' => $schema->string()->enum(MuscleGroup::values())
+                            ->description('One of the listed muscle groups.'),
                         'sets' => $schema->integer(),
                         'rep_min' => $schema->integer(),
                         'rep_max' => $schema->integer(),

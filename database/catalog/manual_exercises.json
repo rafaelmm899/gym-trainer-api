@@ -1,0 +1,164 @@
+[
+  {
+    "slug": "barbell-hip-thrust",
+    "name": "Barbell Hip Thrust",
+    "equipment": "barbell",
+    "target": "glutes",
+    "secondary_muscles": [
+      "hamstrings",
+      "quadriceps",
+      "core"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Sit on the floor with your upper back against the edge of a bench and a barbell across your hips, using a pad if needed.",
+        "Place your feet flat on the floor about hip-width apart, knees bent.",
+        "Brace your core and drive through your heels to lift your hips until your torso and thighs are in a straight line.",
+        "Squeeze your glutes hard at the top and keep your chin slightly tucked.",
+        "Lower your hips under control until they are just above the floor, then repeat."
+      ],
+      "es": [
+        "Siéntate en el suelo con la parte alta de la espalda apoyada en el borde de un banco y una barra sobre las caderas, con una almohadilla si la necesitas.",
+        "Apoya los pies planos en el suelo, separados al ancho de las caderas y con las rodillas flexionadas.",
+        "Activa el abdomen y empuja con los talones para elevar las caderas hasta que el tronco y los muslos queden en línea recta.",
+        "Aprieta fuerte los glúteos arriba y mantén la barbilla ligeramente hacia el pecho.",
+        "Baja las caderas con control hasta quedar justo por encima del suelo y repite."
+      ]
+    }
+  },
+  {
+    "slug": "cable-woodchopper",
+    "name": "Cable Woodchopper",
+    "equipment": "cable",
+    "target": "abs",
+    "secondary_muscles": [
+      "obliques",
+      "shoulders",
+      "hip flexors"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Set a cable pulley to a high position and stand sideways to the machine, feet shoulder-width apart.",
+        "Grab the handle with both hands, arms extended and slightly above your head on the side nearest the machine.",
+        "Brace your core and pull the handle diagonally down and across your body, rotating your torso and pivoting your back foot.",
+        "Keep your arms mostly straight and let the movement come from your trunk, not your arms.",
+        "Return slowly to the start under control, then repeat and switch sides."
+      ],
+      "es": [
+        "Coloca la polea del cable en una posición alta y ponte de lado a la máquina, con los pies separados al ancho de los hombros.",
+        "Agarra el asa con ambas manos, con los brazos extendidos y un poco por encima de la cabeza, del lado más cercano a la máquina.",
+        "Activa el abdomen y tira del asa en diagonal hacia abajo y a través del cuerpo, rotando el torso y girando el pie trasero.",
+        "Mantén los brazos casi rectos y haz que el movimiento salga del tronco y no de los brazos.",
+        "Vuelve despacio a la posición inicial con control, repite y cambia de lado."
+      ]
+    }
+  },
+  {
+    "slug": "bulgarian-split-squat",
+    "name": "Bulgarian Split Squat",
+    "equipment": "dumbbell",
+    "target": "quads",
+    "secondary_muscles": [
+      "glutes",
+      "hamstrings",
+      "core"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Stand about two feet in front of a bench, facing away from it, with a dumbbell in each hand.",
+        "Rest the top of one foot on the bench behind you, keeping your front foot flat on the floor.",
+        "Keep your torso upright and lower your hips straight down until your front thigh is about parallel to the floor.",
+        "Keep your front knee in line with your toes and do not let it collapse inward.",
+        "Drive through your front heel to stand back up, finish all reps, then switch legs."
+      ],
+      "es": [
+        "Colócate a unos dos pies delante de un banco, de espaldas a él, con una mancuerna en cada mano.",
+        "Apoya el empeine de un pie en el banco detrás de ti, con el pie delantero plano en el suelo.",
+        "Mantén el torso erguido y baja las caderas en vertical hasta que el muslo delantero quede casi paralelo al suelo.",
+        "Mantén la rodilla delantera alineada con los dedos del pie y evita que se vaya hacia dentro.",
+        "Empuja con el talón delantero para volver a subir, completa todas las repeticiones y cambia de pierna."
+      ]
+    }
+  },
+  {
+    "slug": "plank",
+    "name": "Plank",
+    "equipment": "body weight",
+    "target": "abs",
+    "secondary_muscles": [
+      "shoulders",
+      "glutes",
+      "lower back"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Lie face down and place your forearms on the floor with elbows directly under your shoulders.",
+        "Tuck your toes and lift your body so it forms a straight line from head to heels.",
+        "Brace your abs, squeeze your glutes and keep your neck neutral, looking at the floor.",
+        "Do not let your hips sag or rise; breathe steadily.",
+        "Hold the position for the planned time, then lower your knees to the floor."
+      ],
+      "es": [
+        "Túmbate boca abajo y apoya los antebrazos en el suelo, con los codos justo debajo de los hombros.",
+        "Apoya la punta de los pies y eleva el cuerpo hasta formar una línea recta de la cabeza a los talones.",
+        "Activa el abdomen, aprieta los glúteos y mantén el cuello neutro, mirando al suelo.",
+        "No dejes que las caderas se hundan ni suban; respira de forma constante.",
+        "Mantén la posición durante el tiempo previsto y luego baja las rodillas al suelo."
+      ]
+    }
+  },
+  {
+    "slug": "face-pull",
+    "name": "Face Pull",
+    "equipment": "cable",
+    "target": "delts",
+    "secondary_muscles": [
+      "upper back",
+      "traps",
+      "rotator cuff"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Set a cable pulley at about chest to head height and attach a rope.",
+        "Grab the rope with an overhand grip, step back so the cable is taut and stand with feet shoulder-width apart.",
+        "Pull the rope towards your face, separating the ends and driving your elbows out and back.",
+        "Squeeze your shoulder blades together at the end of the movement.",
+        "Return slowly to the start without letting the weight stack touch down, then repeat."
+      ],
+      "es": [
+        "Coloca la polea del cable a la altura del pecho o de la cabeza y engancha una cuerda.",
+        "Agarra la cuerda con agarre pronado, da un paso atrás hasta que el cable quede tenso y separa los pies al ancho de los hombros.",
+        "Tira de la cuerda hacia la cara, separando los extremos y llevando los codos hacia fuera y atrás.",
+        "Junta los omóplatos al final del movimiento.",
+        "Vuelve despacio a la posición inicial sin apoyar las placas y repite."
+      ]
+    }
+  },
+  {
+    "slug": "alternating-dumbbell-row",
+    "name": "Alternating Dumbbell Row",
+    "equipment": "dumbbell",
+    "target": "upper back",
+    "secondary_muscles": [
+      "lats",
+      "biceps",
+      "rear deltoids"
+    ],
+    "instruction_steps": {
+      "en": [
+        "Hold a dumbbell in each hand, hinge forward at the hips with a flat back and knees slightly bent.",
+        "Let your arms hang straight down with your palms facing each other.",
+        "Pull one dumbbell towards your hip by driving your elbow back, keeping your torso still.",
+        "Lower it under control and repeat with the other arm.",
+        "Keep alternating arms without rotating your torso or standing up between reps."
+      ],
+      "es": [
+        "Sujeta una mancuerna en cada mano, inclina el torso hacia delante desde las caderas con la espalda recta y las rodillas ligeramente flexionadas.",
+        "Deja los brazos colgando hacia abajo con las palmas enfrentadas.",
+        "Tira de una mancuerna hacia la cadera llevando el codo hacia atrás, sin mover el torso.",
+        "Bájala con control y repite con el otro brazo.",
+        "Sigue alternando los brazos sin rotar el torso ni incorporarte entre repeticiones."
+      ]
+    }
+  }
+]

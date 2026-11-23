@@ -7,6 +7,8 @@ use App\Models\Exercise;
 use App\Models\ExerciseRecommendation;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Maatwebsite\Excel\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Tests\TestCase;
 
 // Unit coverage for docs/plans/export-training-day-csv-spec.md §8, Export TC-6..TC-12.
@@ -37,6 +39,7 @@ it('exposes the exact column header', function () {
     expect($export->headings())->toBe([
         'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
         'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+        'exercise_id',
     ]);
 });
 
@@ -108,4 +111,29 @@ it('emits no rows for a prescription with zero sets', function () {
     [$dayExercise, $export] = dayExerciseExport(['sets' => 0]);
 
     expect($export->map($dayExercise))->toBe([]);
+});
+
+// Exercise id column
+it('ends every row with the catalogue uuid of the exercise', function () {
+    [$dayExercise, $export] = dayExerciseExport(['sets' => 3]);
+
+    $rows = $export->map($dayExercise);
+
+    expect(array_column($rows, 12))->toBe(array_fill(0, 3, $dayExercise->exercise->uuid))
+        ->and(count($export->headings()))->toBe(count($rows[0]));
+});
+
+it('writes the exercise id into a hidden last column of the workbook', function () {
+    [$dayExercise, $export] = dayExerciseExport(['sets' => 2]);
+
+    $path = tempnam(sys_get_temp_dir(), 'export_').'.xlsx';
+    file_put_contents($path, Maatwebsite\Excel\Facades\Excel::raw($export, Excel::XLSX));
+    $sheet = IOFactory::load($path)->getActiveSheet();
+    unlink($path);
+
+    expect($sheet->getCell('M1')->getValue())->toBe('exercise_id')
+        ->and($sheet->getCell('M2')->getValue())->toBe($dayExercise->exercise->uuid)
+        ->and($sheet->getCell('M3')->getValue())->toBe($dayExercise->exercise->uuid)
+        ->and($sheet->getColumnDimension('M')->getVisible())->toBeFalse()
+        ->and($sheet->getColumnDimension('A')->getVisible())->toBeTrue();
 });

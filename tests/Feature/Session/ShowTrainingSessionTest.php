@@ -272,3 +272,23 @@ it('exposes no cycle data of another user', function () {
         ->assertJsonPath('data.code', 'AUTHORIZATION_EXCEPTION')
         ->assertJsonMissingPath('data.cycle_day');
 });
+
+// Catalogue: the prescription carries the catalogue exercise id.
+it('returns the catalogue exercise id on every prescribed exercise', function () {
+    $day = CycleDay::factory()->for(Cycle::factory()->for($this->routine))->create();
+    $exercise = Exercise::factory()->create(['name' => 'Barbell Seated Calf Raise']);
+    $sameName = Exercise::factory()->create(['name' => 'Barbell Seated Calf Raise']);
+    DayExercise::factory()->for($day)->for($exercise)->create(['order' => 1]);
+    DayExercise::factory()->for($day)->for($sameName)->create(['order' => 2]);
+    $session = TrainingSession::factory()->for($this->user)->for($this->routine)->planned($day)->create();
+
+    $response = $this->actingAs($this->user)->getJson(showSessionUrl($session))->assertOk();
+
+    expect($response->json('data.cycle_day.exercises.0.exercise_id'))->toBe($exercise->uuid)
+        ->and($response->json('data.cycle_day.exercises.1.exercise_id'))->toBe($sameName->uuid)
+        ->and($response->json('data.cycle_day.exercises.0.id'))->not->toBe($exercise->uuid);
+
+    $this->actingAs($this->user)
+        ->getJson("/api/v1/exercises/{$exercise->uuid}/history")
+        ->assertOk();
+});

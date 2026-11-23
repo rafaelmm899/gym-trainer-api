@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\Exercise\ExerciseMuscleGroupRequiredException;
 use App\Models\Exercise;
 use App\Services\Exercise\ExerciseCatalogService;
 use Illuminate\Support\Facades\Log;
@@ -32,12 +33,41 @@ it('is case, accent and whitespace insensitive on the slug key', function (strin
     'hyphenated' => 'Barbell-Bench-Press',
 ]);
 
-// TC-32
-it('stores null when the muscle-group hint is not a known group', function () {
-    $exercise = app(ExerciseCatalogService::class)->resolve('Sled Push', 'conditioning');
+// TC-7
+it('refuses to create an exercise without a valid muscle group', function (?string $hint) {
+    expect(fn () => app(ExerciseCatalogService::class)->resolve('Sled Push', $hint))
+        ->toThrow(ExerciseMuscleGroupRequiredException::class);
 
-    expect($exercise->primary_muscle_group)->toBeNull();
+    $this->assertDatabaseCount('exercises', 0);
+})->with(['no hint' => null, 'unknown hint' => 'conditioning', 'empty hint' => '']);
+
+// TC-8
+it('reuses an existing exercise without a hint', function () {
+    $existing = Exercise::factory()->create(['name' => 'Sled Push', 'slug' => 'sled-push']);
+
+    $resolved = app(ExerciseCatalogService::class)->resolve('Sled Push', null);
+
+    expect($resolved->id)->toBe($existing->id);
     $this->assertDatabaseCount('exercises', 1);
+});
+
+// TC-5
+it('gives the same row for a non-breaking hyphen and a plain hyphen', function (string $name) {
+    $existing = Exercise::factory()->create(['name' => 'Pull-Ups', 'slug' => 'pull-ups']);
+
+    $resolved = app(ExerciseCatalogService::class)->resolve($name, 'back');
+
+    expect($resolved->id)->toBe($existing->id);
+    $this->assertDatabaseCount('exercises', 1);
+})->with([
+    'non-breaking hyphen' => "Pull\u{2011}Ups",
+    'plain hyphen' => 'Pull-Ups',
+]);
+
+it('creates a new exercise with the hyphen kept in its slug', function () {
+    $created = app(ExerciseCatalogService::class)->resolve("One\u{2011}Arm Dumbbell Row", 'back');
+
+    expect($created->slug)->toBe('one-arm-dumbbell-row');
 });
 
 // TC-33

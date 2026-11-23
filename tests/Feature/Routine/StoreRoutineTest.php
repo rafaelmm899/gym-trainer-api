@@ -164,6 +164,18 @@ it('returns 502 when an exercise is missing its target weight', function () {
     $this->assertDatabaseCount('routines', 0);
 });
 
+// Catalogue spec TC-10
+it('returns 502 and persists nothing when an exercise has no usable muscle group', function (mixed $group) {
+    fakeCyclePlanner(['days' => [['exercises' => [['primary_muscle_group' => $group]]]]]);
+
+    $this->actingAs($this->user)->postJson('/api/v1/routines', routinePayload())
+        ->assertStatus(502)
+        ->assertJsonPath('data.code', 'AI_GENERATION_FAILED');
+
+    $this->assertDatabaseCount('routines', 0);
+    $this->assertDatabaseCount('exercises', 0);
+})->with(['null' => [null], 'unknown' => ['xyz']]);
+
 // TC-9
 it('feeds the athlete profile and the routine goal and hint into the prompt', function () {
     $this->user->athleteProfile()->update([
@@ -226,7 +238,7 @@ it('saves an omitted or blank hint as null and keeps it out of the prompt', func
     $this->assertDatabaseHas('routines', ['hint' => null]);
 
     CyclePlannerAgent::assertPrompted(
-        fn ($prompt): bool => ! str_contains($prompt->prompt, 'Hint:') && ! str_contains($prompt->prompt, 'null')
+        fn ($prompt): bool => ! str_contains($prompt->prompt, 'Hint:') && preg_match('/\bnull\b/', $prompt->prompt) === 0
     );
 })->with([
     'omitted' => [fn () => routinePayload(exceptKey: 'hint')],
@@ -269,11 +281,11 @@ it('exposes uuids everywhere in the response, never internal primary keys', func
     expect($response->json('data.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.cycle.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.cycle.days.0.id'))->toMatch(uuidV4Pattern())
-        ->and($response->json('data.cycle.days.0.exercises.0.id'))->toMatch(uuidV4Pattern());
+        ->and($response->json('data.cycle.days.0.exercises.0.id'))->toMatch(uuidV4Pattern())
+        ->and($response->json('data.cycle.days.0.exercises.0.exercise_id'))->toMatch(uuidV4Pattern());
 
     $response->assertJsonMissingPath('data.cycle.routine_id')
-        ->assertJsonMissingPath('data.cycle.days.0.cycle_id')
-        ->assertJsonMissingPath('data.cycle.days.0.exercises.0.exercise_id');
+        ->assertJsonMissingPath('data.cycle.days.0.cycle_id');
 });
 
 // TC-17

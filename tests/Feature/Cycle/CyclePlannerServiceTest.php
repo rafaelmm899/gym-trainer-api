@@ -8,6 +8,7 @@ use App\Data\Cycle\CyclePlanExerciseData;
 use App\Data\Cycle\ExerciseProgressionData;
 use App\Enums\Profile\ExperienceLevel;
 use App\Enums\Shared\Goal;
+use App\Enums\Shared\MuscleGroup;
 use App\Exceptions\Cycle\CycleGenerationException;
 use App\Models\AthleteProfile;
 use App\Models\Cycle;
@@ -15,6 +16,7 @@ use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use App\Models\User;
 use App\Services\Cycle\CyclePlannerService;
+use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Support\Collection;
 
 // TC-24
@@ -62,6 +64,14 @@ it('throws CycleGenerationException on a malformed plan shape', function (array 
     'zero sets' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['sets' => 0]]]]])],
     'null weight' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['target_weight_kg' => null]]]]])],
     'unknown muscle group' => [fn () => cyclePlanPayload(['days' => [['focus_muscle_groups' => ['pecs', 'triceps']]]])],
+    'null exercise muscle group' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['primary_muscle_group' => null]]]]])],
+    'unknown exercise muscle group' => [fn () => cyclePlanPayload(['days' => [['exercises' => [['primary_muscle_group' => 'xyz']]]]])],
+    'missing exercise muscle group' => [function () {
+        $payload = cyclePlanPayload();
+        unset($payload['days'][0]['exercises'][0]['primary_muscle_group']);
+
+        return $payload;
+    }],
     'missing split rationale' => [fn () => cyclePlanPayload(['split_rationale' => ''])],
 ]);
 
@@ -432,4 +442,46 @@ it('lists each performed slot with its prescription, actuals and active recommen
 
     expect((new CycleProgressionAgent)->instructions())
         ->toContain('Never add, remove, replace or reorder exercises');
+});
+
+// TC-9
+it('requires the primary muscle group of every first-cycle exercise', function () {
+    $agent = new CyclePlannerAgent;
+    $exercise = $agent->schema(new JsonSchemaTypeFactory)['days']->toArray()['items']['properties']['exercises']['items'];
+
+    expect($exercise['required'])->toContain('primary_muscle_group')
+        ->and($exercise['properties']['primary_muscle_group']['type'])->toBe('string')
+        ->and($exercise['properties']['primary_muscle_group']['enum'])->toBe(MuscleGroup::values())
+        ->and($agent->instructions())->not->toContain('may also be null')
+        ->and($agent->instructions())->toContain('forearms', 'cardio');
+});
+
+// TC-11
+it('accepts a plan that uses the cardio and forearms groups', function () {
+    $payload = cyclePlanPayload();
+    $payload['days'][0]['focus_muscle_groups'] = ['forearms'];
+    $payload['days'][0]['exercises'][0]['primary_muscle_group'] = 'cardio';
+    $payload['days'][0]['exercises'][1]['primary_muscle_group'] = 'forearms';
+    CyclePlannerAgent::fake([$payload]);
+
+    $plan = app(CyclePlannerService::class)->planFirstCycle(AthleteProfile::factory()->create(), Goal::Hypertrophy, null);
+
+    expect($plan->days[0]->focusMuscleGroups)->toBe(['forearms'])
+        ->and($plan->days[0]->exercises[0]->primaryMuscleGroup)->toBe('cardio')
+        ->and($plan->days[0]->exercises[1]->primaryMuscleGroup)->toBe('forearms');
+});
+
+// TC-12
+it('still clones and progresses a legacy exercise that has no muscle group', function () {
+    fakeCycleProgression();
+    $cycle = outgoingCycleForPlanning();
+    $slot = $cycle->cycleDays->firstWhere('order', 2)->dayExercises->firstWhere('order', 1);
+    $slot->exercise->update(['primary_muscle_group' => null]);
+    $cycle = $cycle->fresh(['cycleDays.dayExercises.exercise']);
+
+    $plan = app(CyclePlannerService::class)->cloneDays($cycle);
+    $progressions = progressDayOf($cycle, progressionSummaryFor($cycle), 2);
+
+    expect($plan->days[1]->exercises[0]->primaryMuscleGroup)->toBeNull()
+        ->and($progressions['2.1']->primaryMuscleGroup)->toBeNull();
 });

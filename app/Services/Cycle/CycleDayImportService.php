@@ -16,7 +16,6 @@ use App\Models\Routine;
 use App\Models\TrainingSession;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Validators\Failure;
 use Maatwebsite\Excel\Validators\ValidationException as ExcelValidationException;
@@ -54,9 +53,12 @@ final class CycleDayImportService
         );
 
         $day->loadMissing('dayExercises.exercise');
-        $dayExercisesBySlug = $this->dayExercisesBySlug($day->dayExercises);
+        $import = new CycleDayImport(
+            $this->dayExercisesBy($day->dayExercises, fn (DayExercise $dayExercise): string => $dayExercise->exercise->slug),
+            $this->dayExercisesBy($day->dayExercises, fn (DayExercise $dayExercise): string => $dayExercise->exercise->uuid),
+        );
 
-        return $this->toLogSetData($this->readSheet($file, $dayExercisesBySlug), $dayExercisesBySlug);
+        return $this->toLogSetData($this->readSheet($file, $import), $import);
     }
 
     /**
@@ -64,13 +66,10 @@ final class CycleDayImportService
      * actually runs the `WithValidation` pipeline: `toCollection()` only reads
      * the raw grid and never calls `$import->collection()` at all.
      *
-     * @param  Collection<string, DayExercise>  $dayExercisesBySlug
      * @return Collection<int, Collection<string, mixed>>
      */
-    private function readSheet(UploadedFile $file, Collection $dayExercisesBySlug): Collection
+    private function readSheet(UploadedFile $file, CycleDayImport $import): Collection
     {
-        $import = new CycleDayImport($dayExercisesBySlug);
-
         try {
             Excel::import($import, $file);
         } catch (Throwable $e) {
@@ -109,20 +108,24 @@ final class CycleDayImportService
     }
 
     /**
+     * The day's prescriptions keyed by `$key`; when an exercise is prescribed
+     * twice the first one wins.
+     *
      * @param  Collection<int, DayExercise>  $dayExercises  ordered by `order`, `exercise` loaded
-     * @return Collection<string, DayExercise> keyed by the exercise's catalog slug
+     * @param  callable(DayExercise): string  $key
+     * @return Collection<string, DayExercise>
      */
-    private function dayExercisesBySlug(Collection $dayExercises): Collection
+    private function dayExercisesBy(Collection $dayExercises, callable $key): Collection
     {
-        $bySlug = collect();
+        $keyed = collect();
 
         foreach ($dayExercises as $dayExercise) {
-            if (! $bySlug->has($dayExercise->exercise->slug)) {
-                $bySlug->put($dayExercise->exercise->slug, $dayExercise);
+            if (! $keyed->has($key($dayExercise))) {
+                $keyed->put($key($dayExercise), $dayExercise);
             }
         }
 
-        return $bySlug;
+        return $keyed;
     }
 
     /**
@@ -132,10 +135,9 @@ final class CycleDayImportService
      * unfilled row, not returning it.
      *
      * @param  Collection<int, Collection<string, mixed>>  $rows
-     * @param  Collection<string, DayExercise>  $dayExercisesBySlug
      * @return Collection<int, LogSetData>
      */
-    private function toLogSetData(Collection $rows, Collection $dayExercisesBySlug): Collection
+    private function toLogSetData(Collection $rows, CycleDayImport $import): Collection
     {
         $setNumbers = [];
         $logs = collect();
@@ -149,7 +151,7 @@ final class CycleDayImportService
             }
 
             /** @var DayExercise $dayExercise */
-            $dayExercise = $dayExercisesBySlug->get(Str::slug(Str::ascii((string) $row['exercise'])));
+            $dayExercise = $import->dayExerciseFor($row);
 
             $setNumbers[$dayExercise->exercise_id] = ($setNumbers[$dayExercise->exercise_id] ?? 0) + 1;
 

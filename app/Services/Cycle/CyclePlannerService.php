@@ -468,7 +468,9 @@ final class CyclePlannerService
 
         return new CyclePlanExerciseData(
             name: $this->requireString($exercise, 'name'),
-            primaryMuscleGroup: $this->optionalMuscleGroup($exercise['primary_muscle_group'] ?? null),
+            primaryMuscleGroup: $exerciseId === null
+                ? $this->requireMuscleGroup($exercise['primary_muscle_group'] ?? null)
+                : $this->optionalMuscleGroup($exercise['primary_muscle_group'] ?? null),
             sets: $this->requireInt($exercise, 'sets', min: 1),
             repMin: $repMin,
             repMax: $repMax,
@@ -545,6 +547,21 @@ final class CyclePlannerService
 
             return $group->value;
         }, array_values($values));
+    }
+
+    /**
+     * An exercise the AI chose must carry a known muscle group; a cloned slot
+     * (it has an `$exerciseId`) takes whatever its catalogue row has.
+     */
+    private function requireMuscleGroup(mixed $value): string
+    {
+        $group = is_string($value) ? MuscleGroup::tryFrom($value) : null;
+
+        if ($group === null) {
+            throw new CycleGenerationException('Every exercise needs a known primary_muscle_group.');
+        }
+
+        return $group->value;
     }
 
     private function optionalMuscleGroup(mixed $value): ?string

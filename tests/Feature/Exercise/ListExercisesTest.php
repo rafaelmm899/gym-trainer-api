@@ -91,3 +91,28 @@ it('rejects an unauthenticated request', function () {
         ->assertUnauthorized()
         ->assertJsonPath('data.code', 'AUTHENTICATION_EXCEPTION');
 });
+
+// Catalogue spec TC-35
+it('exposes the catalogue fields, and no instructions, for enriched and legacy rows', function () {
+    Exercise::factory()->create([
+        'name' => 'Barbell Bench Press',
+        'slug' => 'barbell-bench-press',
+        'equipment' => 'barbell',
+        'target_muscle' => 'pectorals',
+        'secondary_muscles' => ['triceps'],
+        'instructions' => ['en' => ['Lie on a bench.']],
+    ]);
+    Exercise::factory()->create(['name' => 'Zercher Squat', 'slug' => 'zercher-squat']);
+
+    $data = $this->actingAs($this->user)->getJson('/api/v1/exercises')->assertOk()->json('data');
+
+    expect($data[0])->toMatchArray([
+        'name' => 'Barbell Bench Press',
+        'equipment' => 'barbell',
+        'target_muscle' => 'pectorals',
+        'secondary_muscles' => ['triceps'],
+        'media_url' => null,
+    ])
+        ->and($data[0])->not->toHaveKeys(['instructions', 'created_by_ai', 'external_id'])
+        ->and($data[1])->toMatchArray(['equipment' => null, 'target_muscle' => null, 'secondary_muscles' => [], 'media_url' => null]);
+});

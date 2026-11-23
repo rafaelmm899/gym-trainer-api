@@ -6,9 +6,11 @@ use App\Models\DayExercise;
 use App\Models\ExerciseRecommendation;
 use Illuminate\Database\Eloquent\Collection;
 use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
+use Maatwebsite\Excel\Events\AfterSheet;
 
 /**
  * A flat, fillable `.xlsx` for one training day: a header row, then one row per
@@ -18,8 +20,12 @@ use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
  * A pure Laravel Excel adapter: it is handed the day's prescriptions and the
  * routine's active recommendations (keyed by exercise) and only shapes them into
  * rows. The guards and queries live in `App\Services\Cycle\CycleDayExportService`.
+ *
+ * The `exercise_id` column (the catalogue uuid) is what the import matches on;
+ * `exercise` is the readable name and is only a fallback for older files. The id
+ * column is hidden so nobody edits it by accident.
  */
-final class CycleDayExport implements FromCollection, WithHeadings, WithMapping, WithStrictNullComparison
+final class CycleDayExport implements FromCollection, WithEvents, WithHeadings, WithMapping, WithStrictNullComparison
 {
     /**
      * @param  Collection<int, DayExercise>  $dayExercises  ordered by `order`, `exercise` loaded
@@ -40,6 +46,18 @@ final class CycleDayExport implements FromCollection, WithHeadings, WithMapping,
     }
 
     /**
+     * @return array<class-string, callable(AfterSheet): void>
+     */
+    public function registerEvents(): array
+    {
+        return [
+            AfterSheet::class => function (AfterSheet $event): void {
+                $event->sheet->getDelegate()->getColumnDimension('M')->setVisible(false);
+            },
+        ];
+    }
+
+    /**
      * @return list<string>
      */
     public function headings(): array
@@ -47,6 +65,7 @@ final class CycleDayExport implements FromCollection, WithHeadings, WithMapping,
         return [
             'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
             'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+            'exercise_id',
         ];
     }
 
@@ -78,6 +97,7 @@ final class CycleDayExport implements FromCollection, WithHeadings, WithMapping,
             $recommendation === null ? null : $this->number($recommendation->target_weight_kg),
             $recommendation?->action->value,
             null, null, null, null,
+            $row->exercise->uuid,
         ], range(1, $row->sets));
     }
 

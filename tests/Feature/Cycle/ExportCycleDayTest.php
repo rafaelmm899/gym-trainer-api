@@ -91,6 +91,7 @@ it('downloads the day as an .xlsx workbook scoped to that day', function () {
         expect($export->headings())->toBe([
             'exercise', 'set_number', 'prescribed_weight_kg', 'prescribed_reps', 'prescribed_rpe',
             'rest_seconds', 'recommended_weight_kg', 'recommended_action', 'weight_kg', 'reps', 'rpe', 'note',
+            'exercise_id',
         ])
             ->and($rows)->toHaveCount(7)
             ->and(array_column($rows, 0))->toBe(['Sentadilla', 'Sentadilla', 'Sentadilla', 'Sentadilla', 'Zancada', 'Zancada', 'Zancada'])
