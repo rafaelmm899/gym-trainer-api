@@ -1,8 +1,8 @@
 -- Preflight for the migration 2026_11_23_120100_reconcile_existing_exercises.
 -- READ ONLY: it runs inside a read-only transaction and changes nothing.
--- Generated from database/catalog/exercise-reconciliation.json.
+-- Generated from database/catalog/exercise-reconciliation.json; regenerate it if the mapping changes.
 -- Run it against production BEFORE deploying and read every section:
---   psql "$PROD_URL" -f preflight-reconciliation.sql
+--   psql "$PROD_URL" -f database/catalog/preflight-reconciliation.sql
 BEGIN READ ONLY;
 
 \echo
@@ -98,69 +98,60 @@ ORDER BY m.id;
 SELECT id, name, slug FROM exercises WHERE id NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75) ORDER BY id;
 
 \echo
-\echo '== 4. Merge collisions (each count must be 0; any other value aborts the migration)'
-WITH pairs(loser, winner) AS (VALUES
+\echo '== 4. Merge collisions: a winner and the exercises merged into it must never share a session, a (user, routine) or a cycle day (each count must be 0; any other value aborts the migration)'
+WITH members(exercise_id, winner) AS (VALUES
+    (25, 25),
     (40, 25),
+    (4, 4),
     (43, 4),
-    (47, 16),
-    (53, 13),
-    (62, 44),
-    (64, 1),
-    (67, 6),
     (68, 4),
+    (16, 16),
+    (47, 16),
+    (13, 13),
+    (53, 13),
+    (44, 44),
+    (62, 44),
+    (1, 1),
+    (64, 1),
+    (6, 6),
+    (67, 6),
+    (12, 12),
     (70, 12),
+    (46, 46),
     (71, 46),
+    (51, 51),
     (74, 51)
 )
-SELECT 'sessions with sets of both exercises' AS check, count(*) AS found
-FROM pairs p JOIN set_logs a ON a.exercise_id = p.loser JOIN set_logs b ON b.exercise_id = p.winner AND b.session_id = a.session_id
+SELECT 'sessions with sets of two exercises that merge together' AS check, count(*) AS found FROM (
+    SELECT m.winner, s.session_id FROM set_logs s JOIN members m ON m.exercise_id = s.exercise_id
+    GROUP BY m.winner, s.session_id HAVING count(DISTINCT s.exercise_id) > 1) t
 UNION ALL
-SELECT 'routines with a recommendation for both', count(*)
-FROM pairs p JOIN exercise_recommendations a ON a.exercise_id = p.loser
-JOIN exercise_recommendations b ON b.exercise_id = p.winner AND b.user_id = a.user_id AND b.routine_id = a.routine_id
+SELECT 'routines with recommendations for two that merge together', count(*) FROM (
+    SELECT m.winner, r.user_id, r.routine_id FROM exercise_recommendations r JOIN members m ON m.exercise_id = r.exercise_id
+    GROUP BY m.winner, r.user_id, r.routine_id HAVING count(DISTINCT r.exercise_id) > 1) t
 UNION ALL
-SELECT 'cycle days prescribing both', count(*)
-FROM pairs p JOIN day_exercises a ON a.exercise_id = p.loser
-JOIN day_exercises b ON b.exercise_id = p.winner AND b.cycle_day_id = a.cycle_day_id;
+SELECT 'cycle days prescribing two that merge together', count(*) FROM (
+    SELECT m.winner, d.cycle_day_id FROM day_exercises d JOIN members m ON m.exercise_id = d.exercise_id
+    GROUP BY m.winner, d.cycle_day_id HAVING count(DISTINCT d.exercise_id) > 1) t;
 
 \echo
-\echo '== 5. Repaired slug already used by an exercise that stays (expect 0 rows; any row aborts the migration)'
-WITH s(id, new_slug) AS (VALUES
-    (5, 'close-grip-bench-press'),
-    (10, 'bent-over-barbell-row'),
-    (11, 'pull-ups'),
-    (18, 'cable-pull-through'),
-    (29, 'incline-close-grip-bench'),
-    (33, 't-bar-row'),
-    (34, 'chin-ups'),
-    (35, 'straight-arm-pulldown'),
-    (44, 'one-arm-dumbbell-row'),
-    (45, 'bent-over-reverse-fly'),
-    (59, 'dumbbell-pull-over')
+\echo '== 5. Repaired slug already used by an exercise that stays (expect 0 rows; any row aborts the migration). Covers every name with a Unicode hyphen, including exercises created after the mapping'
+WITH hyphenated AS (
+    SELECT id, name,
+           trim(both '-' FROM regexp_replace(lower(regexp_replace(name, ('[' || chr(8208) || '-' || chr(8213) || ']'), '-', 'g')), '[^a-z0-9]+', '-', 'g')) AS new_slug
+    FROM exercises
+    WHERE name ~ ('[' || chr(8208) || '-' || chr(8213) || ']')
 )
-SELECT s.id, s.new_slug, e.id AS taken_by
-FROM s JOIN exercises e ON e.slug = s.new_slug AND e.id <> s.id
+SELECT h.id, h.name, h.new_slug, e.id AS taken_by
+FROM hyphenated h JOIN exercises e ON e.slug = h.new_slug AND e.id <> h.id
 WHERE e.id NOT IN (40, 43, 47, 53, 62, 64, 67, 68, 70, 71, 74);  -- the merged rows are deleted before slugs are repaired
 
 \echo
 \echo '== 6. Rows the merge will repoint (day_exercises / set_logs / recommendations)'
-WITH pairs(loser, winner) AS (VALUES
-    (40, 25),
-    (43, 4),
-    (47, 16),
-    (53, 13),
-    (62, 44),
-    (64, 1),
-    (67, 6),
-    (68, 4),
-    (70, 12),
-    (71, 46),
-    (74, 51)
-)
 SELECT
-    (SELECT count(*) FROM day_exercises WHERE exercise_id IN (SELECT loser FROM pairs)) AS day_exercises,
-    (SELECT count(*) FROM set_logs WHERE exercise_id IN (SELECT loser FROM pairs)) AS set_logs,
-    (SELECT count(*) FROM exercise_recommendations WHERE exercise_id IN (SELECT loser FROM pairs)) AS recommendations;
+    (SELECT count(*) FROM day_exercises WHERE exercise_id IN (40, 43, 47, 53, 62, 64, 67, 68, 70, 71, 74)) AS day_exercises,
+    (SELECT count(*) FROM set_logs WHERE exercise_id IN (40, 43, 47, 53, 62, 64, 67, 68, 70, 71, 74)) AS set_logs,
+    (SELECT count(*) FROM exercise_recommendations WHERE exercise_id IN (40, 43, 47, 53, 62, 64, 67, 68, 70, 71, 74)) AS recommendations;
 
 \echo
 \echo '== 7. Totals BEFORE the deploy (save them: after it, exercises drops by 11 plus the imported ones; the other four must not change)'

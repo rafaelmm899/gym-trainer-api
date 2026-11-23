@@ -79,6 +79,12 @@ by the product owner. Eleven existing names contain a non-breaking hyphen
   exercise images, WODs, wger or any other source.
 - Changing the name, slug or muscle group of an existing exercise through the
   importer (only the reconciliation migration touches slugs).
+- Keeping the slugs of the merged duplicates as aliases. Deleting a merged
+  exercise frees its slug (`bench-press`, `lateral-raise`, ...), and the planner
+  still names exercises freely, so a later first-cycle plan that says "Bench
+  Press" creates a new row instead of reusing the winner. This is the same
+  duplication that existed before, and it is solved by the follow-up story in
+  which the planner picks only from the catalogue.
 
 ---
 
@@ -157,7 +163,7 @@ Not applicable — no components affected.
 | Table | Action | Details |
 |---|---|---|
 | `exercises` | Add columns (migration `2026_11_23_120000_add_catalogue_columns_to_exercises_table`) | `external_id` string(8) nullable **unique** (dataset id such as `"0025"`; several NULLs allowed); `equipment` string nullable (raw dataset value, e.g. `barbell`); `target_muscle` string nullable (raw dataset `target`, e.g. `pectorals`); `secondary_muscles` json nullable (list of strings); `instructions` json nullable (`{"en": [steps], "es": [steps]}`); `media_url` string nullable. Every column is nullable, so the previous web revision keeps working while the migration runs ahead of the deploy. Slug stays unique |
-| `exercises` | Data migration `2026_11_23_120100_reconcile_existing_exercises` | Reads `database/catalog/exercise-reconciliation.json` (75 entries: `id`, `name`, `action` = `enrich` / `merge` / `manual` / `untouched`, `external_id`, `merge_into_id`). Self-contained (query builder only, no models or services). In one transaction: (1) if no entry matches an existing row by `id` and `name` (empty or development database), skip steps 2 to 5; (2) if some match but any entry does not, throw and list them (rolls back); (3) for each `merge` pair, throw if a session has sets of both exercises, if a `(user, routine)` has a recommendation for both, or if a cycle day prescribes both; (4) repoint `day_exercises`, `set_logs` and `exercise_recommendations` of each merged exercise to its winner and delete it; (5) set `external_id` on the 56 `enrich` rows; (6) always, recompute the slug of every exercise whose name contains a Unicode hyphen (U+2010 to U+2015) with the new rule and throw if the recomputed slug is already taken. Other slugs are never recomputed, so a database where the importer already ran (slugs with an `-<external_id>` suffix) is not disturbed. `down()` is a documented no-op (the deleted rows cannot be restored; the runbook requires a backup) |
+| `exercises` | Data migration `2026_11_23_120100_reconcile_existing_exercises` | Reads `database/catalog/exercise-reconciliation.json` (75 entries: `id`, `name`, `action` = `enrich` / `merge` / `manual` / `untouched`, `external_id`, `merge_into_id`). Self-contained (query builder only, no models or services). In one transaction: (1) if no entry matches an existing row by `id` and `name` (empty or development database), skip steps 2 to 5; (2) if some match but any entry does not, throw and list them (rolls back); (3) for each winner and the exercises merged into it, throw if a session has sets of two of them, if a `(user, routine)` has a recommendation for two of them, or if a cycle day prescribes two of them (two exercises merged into the same winner are checked against each other too); (4) repoint `day_exercises`, `set_logs` and `exercise_recommendations` of each merged exercise to its winner and delete it; (5) set `external_id` on the 56 `enrich` rows; (6) always, recompute the slug of every exercise whose name contains a Unicode hyphen (U+2010 to U+2015) with the new rule and throw if the recomputed slug is already taken. Other slugs are never recomputed, so a database where the importer already ran (slugs with an `-<external_id>` suffix) is not disturbed. `down()` is a documented no-op (the deleted rows cannot be restored; the runbook requires a backup) |
 
 The model gets the new `#[Fillable]` fields, `secondary_muscles` and
 `instructions` cast to `array`, the `@method` PHPDoc for `slugFor()`, and a
@@ -455,6 +461,23 @@ pair, a row with an unknown `target`, a row without Spanish steps).*
 - **When:** reading `THIRD_PARTY_NOTICES.md`.
 - **Expect:** it contains the dataset's MIT licence text, the copyright holder and a statement that the dataset media is not included.
 
+**Reconciliation migration, review follow-ups**
+
+**TC-41:** two exercises merged into the same winner cannot share a session
+- **Given:** a session with a set of exercise 43 and a set of exercise 68 (both merge into 4).
+- **When:** running the migration.
+- **Expect:** it throws naming #43, #68 and #4; nothing changed.
+
+**TC-42:** two exercises merged into the same winner cannot share a recommendation scope or a cycle day
+- **Given:** a `(user, routine)` with recommendations for 43 and 68, and separately a cycle day prescribing 43 and 68.
+- **When:** running the migration.
+- **Expect:** it throws in each case; nothing changed.
+
+**TC-43:** a failure after writes started rolls everything back
+- **Given:** the 75 rows with history on a merged exercise, and a surviving exercise whose slug equals the repaired slug of `Pull‑Ups`.
+- **When:** running the migration (the merges and the enrichment run before the slug repair fails).
+- **Expect:** it throws; every exercise still exists, no `external_id` is set, `day_exercises`, `set_logs` and recommendations are unchanged and `Pull‑Ups` keeps its old slug.
+
 ---
 
 ## 9. Technical Decisions
@@ -463,7 +486,7 @@ pair, a row with an unknown `target`, a row without Spanish steps).*
 |---|---|---|
 | Reconciliation of existing rows | A data migration reading a committed JSON mapping, instead of the command in the ticket | It runs by itself on deploy, so there is no CSV to deliver to Cloud Run; the mapping holds no user data |
 | Safety of the migration | One transaction; abort if the database half-matches the mapping or any merge pair collides; no-op on databases that do not look like production | A migration has no dry-run; partial application is worse than failing the deploy |
-| Rehearsal instead of dry-run | Run the migration on a clone of `gym_trainer_prod_copy` before deploying; take a backup first | Merges delete rows and `down()` cannot restore them. Evidence on the 2026-11-06 copy: 0 colliding sessions, 0 colliding recommendations, 0 cycle days with both exercises; 25 `day_exercises`, 1 set and 1 recommendation to repoint |
+| Rehearsal instead of dry-run | Run the migration on a **PostgreSQL** clone of `gym_trainer_prod_copy` before deploying (the tests run on SQLite, which accepts queries PostgreSQL rejects, such as `select *` with `group by`); take a backup first | Merges delete rows and `down()` cannot restore them. Evidence on the 2026-11-06 copy: 0 colliding sessions, 0 colliding recommendations, 0 cycle days with both exercises; 25 `day_exercises`, 1 set and 1 recommendation to repoint |
 | Migration independence | Query builder only, no models, services or helpers from `app/` | A migration must keep working when app classes change |
 | Order in production | Migrate (schema, reconciliation) first, then `exercises:import` | The migration assigns `external_id` to existing rows; the importer then refreshes them by `external_id` instead of creating duplicates |
 | Importer key | `external_id` only; never adopts a row by slug | A slug match can disagree with the approved mapping (for example id 43 shares its slug with dataset 0334 but is merged into 4) |
@@ -498,7 +521,7 @@ pair, a row with an unknown `target`, a row without Spanish steps).*
 | 5 | `config/catalog.php`, `ExerciseImportData`, `ExerciseDatasetService`, the 12-record fixture | Service unit tests cover mapping, validation and repair |
 | 6 | `ExerciseImportAction` and `exercises:import` | TC-13 to TC-22 pass |
 | 7 | `database/catalog/manual_exercises.json` (the 6 approved entries) and its import | TC-23, TC-24 pass |
-| 8 | `database/catalog/exercise-reconciliation.json` (75 entries) and the data migration | TC-25 to TC-34 pass |
+| 8 | `database/catalog/exercise-reconciliation.json` (75 entries), the data migration and `database/catalog/preflight-reconciliation.sql` | TC-25 to TC-34 and TC-41 to TC-43 pass; the migration and the preflight were run on PostgreSQL clones, with and without a planted collision |
 | 9 | `ExerciseResource` fields, `ExerciseDetailResource`, `ShowExerciseController`, route `exercises.show`, `Vary` header, Scramble description of the header | TC-35 to TC-39 pass; `GET /docs/api.json` lists the new endpoint and fields |
 | 10 | `THIRD_PARTY_NOTICES.md`, runbook in `docs/operations.md` (backup, rehearsal, migrate, `exercises:import` job), `docs/use-cases.md` (UC-21 and detail) | TC-40 passes; docs describe the order and the rehearsal |
 | 11 | Rehearsal on a clone of `gym_trainer_prod_copy`, then `composer check` | The clone ends with 64 exercises, 823 sets, 41 recommendations and 315 `day_exercises` intact, the 11 merges applied and `exercises:import` run on it; Pint, PHPStan and Pest pass, new tests looped |

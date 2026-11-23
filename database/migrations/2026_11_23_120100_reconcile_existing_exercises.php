@@ -67,8 +67,14 @@ return new class extends Migration
 
         $merges = array_filter($entries, fn (array $entry): bool => $entry['action'] === 'merge');
 
+        $losersByWinner = [];
+
         foreach ($merges as $merge) {
-            $this->guardMerge($merge['id'], $merge['merge_into_id']);
+            $losersByWinner[$merge['merge_into_id']][] = $merge['id'];
+        }
+
+        foreach ($losersByWinner as $winner => $losers) {
+            $this->guardMerge($winner, $losers);
         }
 
         foreach ($merges as $merge) {
@@ -82,24 +88,31 @@ return new class extends Migration
         }
     }
 
-    private function guardMerge(int $loser, int $winner): void
+    /**
+     * The winner and every exercise merged into it end up as one exercise, so no
+     * session, `(user, routine)` or cycle day may hold two of them: that would
+     * break a unique key (sets, recommendations) or leave the same exercise
+     * prescribed twice on a day. Two exercises merged into the same winner are
+     * checked against each other too, not only against the winner.
+     *
+     * @param  list<int>  $losers
+     */
+    private function guardMerge(int $winner, array $losers): void
     {
-        $collides = DB::table('set_logs as a')
-            ->join('set_logs as b', 'b.session_id', '=', 'a.session_id')
-            ->where('a.exercise_id', $loser)->where('b.exercise_id', $winner)
-            ->exists()
-            || DB::table('exercise_recommendations as a')
-                ->join('exercise_recommendations as b', fn ($join) => $join
-                    ->on('b.user_id', '=', 'a.user_id')->on('b.routine_id', '=', 'a.routine_id'))
-                ->where('a.exercise_id', $loser)->where('b.exercise_id', $winner)
-                ->exists()
-            || DB::table('day_exercises as a')
-                ->join('day_exercises as b', 'b.cycle_day_id', '=', 'a.cycle_day_id')
-                ->where('a.exercise_id', $loser)->where('b.exercise_id', $winner)
-                ->exists();
+        $ids = [$winner, ...$losers];
+
+        // PostgreSQL rejects `select *` with `group by`, so each query selects its grouped columns.
+        $collides = DB::table('set_logs')->select('session_id')->whereIn('exercise_id', $ids)
+            ->groupBy('session_id')->havingRaw('count(distinct exercise_id) > 1')->exists()
+            || DB::table('exercise_recommendations')->select('user_id', 'routine_id')->whereIn('exercise_id', $ids)
+                ->groupBy('user_id', 'routine_id')->havingRaw('count(distinct exercise_id) > 1')->exists()
+            || DB::table('day_exercises')->select('cycle_day_id')->whereIn('exercise_id', $ids)
+                ->groupBy('cycle_day_id')->havingRaw('count(distinct exercise_id) > 1')->exists();
 
         if ($collides) {
-            throw new RuntimeException("Exercise #{$loser} cannot be merged into #{$winner}: both appear in the same session, recommendation or cycle day.");
+            $list = implode(', #', $losers);
+
+            throw new RuntimeException("Exercises #{$list} cannot be merged into #{$winner}: two of them appear in the same session, recommendation or cycle day.");
         }
     }
 

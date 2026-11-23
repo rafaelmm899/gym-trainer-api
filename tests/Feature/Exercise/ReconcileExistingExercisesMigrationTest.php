@@ -257,3 +257,57 @@ it('aborts when a repaired slug is already taken', function () {
 
     expect(Exercise::query()->where('name', "Pull\u{2011}Ups")->sole()->slug)->toBe('pullups');
 });
+
+// Review follow-up: two exercises merged into the same winner (43 and 68 into 4)
+it('aborts when two exercises merged into the same winner share a session', function () {
+    seedProductionExercises();
+    $session = TrainingSession::factory()->create();
+    SetLog::factory()->create(['session_id' => $session->id, 'exercise_id' => 43, 'set_number' => 1]);
+    SetLog::factory()->create(['session_id' => $session->id, 'exercise_id' => 68, 'set_number' => 1]);
+    $before = historyTotals();
+
+    expect(fn () => runReconciliation())->toThrow(RuntimeException::class, '#43, #68 cannot be merged into #4');
+
+    expect(historyTotals())->toBe($before);
+});
+
+it('aborts when two exercises merged into the same winner share a recommendation scope', function () {
+    seedProductionExercises();
+    $user = User::factory()->create();
+    $routine = Routine::factory()->for($user)->create();
+    ExerciseRecommendation::factory()->create(['user_id' => $user->id, 'routine_id' => $routine->id, 'exercise_id' => 43]);
+    ExerciseRecommendation::factory()->create(['user_id' => $user->id, 'routine_id' => $routine->id, 'exercise_id' => 68]);
+    $before = historyTotals();
+
+    expect(fn () => runReconciliation())->toThrow(RuntimeException::class, 'cannot be merged into #4');
+
+    expect(historyTotals())->toBe($before);
+});
+
+it('aborts when two exercises merged into the same winner are prescribed on one cycle day', function () {
+    seedProductionExercises();
+    $day = CycleDay::factory()->create();
+    DayExercise::factory()->create(['cycle_day_id' => $day->id, 'exercise_id' => 43, 'order' => 1]);
+    DayExercise::factory()->create(['cycle_day_id' => $day->id, 'exercise_id' => 68, 'order' => 2]);
+    $before = historyTotals();
+
+    expect(fn () => runReconciliation())->toThrow(RuntimeException::class, 'cannot be merged into #4');
+
+    expect(historyTotals())->toBe($before);
+});
+
+// Review follow-up: a failure after the merges and the enrichment already wrote
+it('rolls back the merges and the enrichment when the slug repair fails', function () {
+    seedProductionExercises();
+    giveHistoryTo(40);
+    Exercise::factory()->create(['id' => 900, 'name' => 'Something Else', 'slug' => 'pull-ups']);
+    $before = historyTotals();
+
+    expect(fn () => runReconciliation())->toThrow(RuntimeException::class, "'pull-ups'");
+
+    expect(historyTotals())->toBe($before)
+        ->and(Exercise::query()->whereKey(40)->exists())->toBeTrue()
+        ->and(Exercise::query()->whereNotNull('external_id')->count())->toBe(0)
+        ->and(DB::table('day_exercises')->where('exercise_id', 40)->count())->toBe(1)
+        ->and(Exercise::query()->find(11)->slug)->toBe('pullups');
+});
