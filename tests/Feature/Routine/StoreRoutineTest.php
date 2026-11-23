@@ -281,11 +281,11 @@ it('exposes uuids everywhere in the response, never internal primary keys', func
     expect($response->json('data.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.cycle.id'))->toMatch(uuidV4Pattern())
         ->and($response->json('data.cycle.days.0.id'))->toMatch(uuidV4Pattern())
-        ->and($response->json('data.cycle.days.0.exercises.0.id'))->toMatch(uuidV4Pattern());
+        ->and($response->json('data.cycle.days.0.exercises.0.id'))->toMatch(uuidV4Pattern())
+        ->and($response->json('data.cycle.days.0.exercises.0.exercise_id'))->toMatch(uuidV4Pattern());
 
     $response->assertJsonMissingPath('data.cycle.routine_id')
-        ->assertJsonMissingPath('data.cycle.days.0.cycle_id')
-        ->assertJsonMissingPath('data.cycle.days.0.exercises.0.exercise_id');
+        ->assertJsonMissingPath('data.cycle.days.0.cycle_id');
 });
 
 // TC-17

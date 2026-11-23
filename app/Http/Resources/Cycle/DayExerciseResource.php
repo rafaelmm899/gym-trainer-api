@@ -18,6 +18,7 @@ class DayExerciseResource extends JsonResource
     {
         return [
             'id' => $this->uuid,
+            'exercise_id' => $this->exercise->uuid,
             'order' => $this->order,
             'name' => $this->exercise->name,
             'sets' => $this->sets,
