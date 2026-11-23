@@ -220,7 +220,7 @@ No other configuration changes.
 | Existing exercises in production | 75 rows, 11 duplicates, 11 broken slugs | 64 rows, duplicates merged, slugs repaired, history repointed, ids and uuids of winners kept |
 | `GET /exercises` | `id`, `name`, `slug`, `primary_muscle_group` | plus `equipment`, `target_muscle`, `secondary_muscles`, `media_url` |
 | `GET /exercises/{exercise}` | does not exist | detail with `instructions` in the `Accept-Language` language |
-| Deploy | `migrate` | `migrate` (schema + reconciliation, automatic) then one `exercises:import` job |
+| Deploy | `migrate` | `migrate` (schema + reconciliation, automatic), then `docker/production/deploy.sh` runs `exercises:import` as a Cloud Run job step; a failed import never blocks the deploy, the script prints the command to rerun it |
 
 ---
 

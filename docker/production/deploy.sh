@@ -4,13 +4,17 @@ set -euo pipefail
 # Builds the SPA, builds and pushes the production image with Cloud Build, points
 # both Cloud Run jobs at that exact image digest (never the moving `:latest`
 # tag, so a deploy is reproducible and revertible), runs the migrations with the
-# new image, and only then switches the web service over.
+# new image, loads the exercise catalogue, and only then switches the web service
+# over.
 # There are no long-lived queue workers to restart: `process-queue` is a short
 # job started every couple of minutes, so its next execution already runs the
 # new image; one that is in flight finishes on the old code within its 120 s cap.
 # Run it through `make deploy`; every setting below can be overridden by env.
 # SPA_ONLY=1 ships just a new SPA build: the image is rebuilt and the web
 # service redeployed, but the jobs are left alone and no migrations run.
+# The catalogue import is idempotent and downloads the pinned dataset from GitHub;
+# it never blocks a deploy (the schema is already migrated and the web service
+# works without it), so a failure only prints the command to run it again.
 
 PROJECT="${GCP_PROJECT:-gym-trainer-api}"
 REGION="${GCP_REGION:-southamerica-east1}"
@@ -57,10 +61,21 @@ if [[ "${SPA_ONLY:-0}" != 1 ]]; then
     echo "==> Running migrations"
     gcloud run jobs execute "${JOBS[0]}" --project "$PROJECT" --region "$REGION" --wait \
         --args=artisan,migrate,--force
+
+    echo "==> Loading the exercise catalogue"
+    if ! gcloud run jobs execute "${JOBS[0]}" --project "$PROJECT" --region "$REGION" --wait \
+        --args=artisan,exercises:import; then
+        IMPORT_FAILED=1
+    fi
 fi
 
 echo "==> Deploying the web service"
 gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$digest"
+
+if [[ "${IMPORT_FAILED:-0}" == 1 ]]; then
+    echo "WARNING: the exercise catalogue import failed or rejected records. Fix the cause and run:"
+    echo "gcloud run jobs execute ${JOBS[0]} --project $PROJECT --region $REGION --wait --args=artisan,exercises:import"
+fi
 
 echo "==> Done. Recent errors:"
 echo "gcloud logging read 'resource.type=\"cloud_run_revision\" AND severity>=ERROR' --project $PROJECT --freshness=10m --limit=10"
